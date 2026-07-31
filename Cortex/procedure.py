@@ -10,7 +10,7 @@ import yaml
 
 from Cortex import config
 
-log = config.get_logger("cortex.procedure")
+log = config.get_logger("Cortex.procedure")
 
 
 def load_procedure(incident_type: str) -> dict:

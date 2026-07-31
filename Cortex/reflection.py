@@ -8,7 +8,7 @@ from Cortex.diff import compute_diff
 from Cortex.memory_semantic import DataHubClient
 from Cortex.models import AssetSnapshot, Experience
 
-log = config.get_logger("cortex.reflection")
+log = config.get_logger("Cortex.reflection")
 
 
 def reflect(experience: Experience) -> tuple[bool, str]:

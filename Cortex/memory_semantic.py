@@ -1,9 +1,4 @@
 """
-Wraps DataHub. In MOCK_MODE (default), returns canned fixture data so
-you can develop and debug graph.py without a live DataHub instance.
-Flip CORTEX_MOCK_MODE=false and fill in DATAHUB_GMS_URL / DATAHUB_TOKEN
-in .env once you're testing against the real Cloud trial.
-
 Real implementation is intentionally left as clearly-marked TODOs —
 don't guess at DataHub's exact GraphQL schema from memory; check the
 live docs/schema once you're actually wired up.
@@ -11,7 +6,7 @@ live docs/schema once you're actually wired up.
 from Cortex import config
 from Cortex.models import AssetSnapshot
 
-log = config.get_logger("cortex.memory_semantic")
+log = config.get_logger("Cortex.memory_semantic")
 
 # --- Mock fixtures -----------------------------------------------------
 # A tiny fake warehouse: revenue dashboard <- daily_metrics <- dbt model <- raw_sales.

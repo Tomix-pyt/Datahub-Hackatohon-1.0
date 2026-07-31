@@ -4,7 +4,7 @@ this is the only place that changes.
 """
 from Cortex import config
 
-log = config.get_logger("cortex.llm")
+log = config.get_logger("Cortex.llm")
 
 
 def generate_fix(root_cause: str, evidence: dict) -> str:

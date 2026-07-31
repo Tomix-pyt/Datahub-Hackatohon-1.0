@@ -6,7 +6,7 @@ isolation, no I/O, no side effects.
 from Cortex import config
 from Cortex.models import AssetSnapshot, DiffResult
 
-log = config.get_logger("cortex.diff")
+log = config.get_logger("Cortex.diff")
 
 
 def compute_diff(old: AssetSnapshot, current: AssetSnapshot) -> DiffResult:

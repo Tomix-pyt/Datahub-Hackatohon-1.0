@@ -18,6 +18,7 @@ import io
 from PIL import Image
 from typing import Optional, TypedDict
 
+
 from langgraph.graph import END, StateGraph
 
 from Cortex import config
@@ -29,7 +30,7 @@ from Cortex.models import AssetSnapshot, Experience, Incident
 from Cortex.procedure import load_procedure
 from Cortex.reflection import check_recurrence_despite_no_diff, reflect
 
-log = config.get_logger("cortex.graph")
+log = config.get_logger("Cortex.graph")
 from IPython.display import display
 
 
@@ -56,6 +57,7 @@ class CortexState(TypedDict, total=False):
     experience: Experience
     should_promote: bool
     promote_reason: str
+
 
 
 # --- Nodes --------------------------------------------------------------

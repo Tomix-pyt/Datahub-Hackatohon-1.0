@@ -9,4 +9,6 @@ dependencies = [
     "chromadb>=1.5.9",
     "datahub>=0.999.1",
     "ipython>=9.16.0",
+    "langgraph>=1.2.10",
+    "pillow>=12.3.0",
 ]

@@ -15,7 +15,7 @@ import chromadb
 from Cortex import config
 from Cortex.models import Experience
 
-log = config.get_logger("cortex.memory_episodic")
+log = config.get_logger("Cortex.memory_episodic")
 
 # A new EpisodicMemory() gets constructed inside almost every graph node
 # (retrieve, store...). Opening a fresh chromadb.PersistentClient each
