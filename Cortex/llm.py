@@ -2,7 +2,7 @@
 One function, on purpose. If you ever need to swap models or providers,
 this is the only place that changes.
 """
-from cortex import config
+from Cortex import config
 
 log = config.get_logger("cortex.llm")
 

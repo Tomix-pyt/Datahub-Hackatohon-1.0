@@ -20,14 +20,14 @@ from typing import Optional, TypedDict
 
 from langgraph.graph import END, StateGraph
 
-from cortex import config
-from cortex.diff import compute_diff
-from cortex.llm import generate_fix
-from cortex.memory_episodic import EpisodicMemory
-from cortex.memory_semantic import DataHubClient
-from cortex.models import AssetSnapshot, Experience, Incident
-from cortex.procedure import load_procedure
-from cortex.reflection import check_recurrence_despite_no_diff, reflect
+from Cortex import config
+from Cortex.diff import compute_diff
+from Cortex.llm import generate_fix
+from Cortex.memory_episodic import EpisodicMemory
+from Cortex.memory_semantic import DataHubClient
+from Cortex.models import AssetSnapshot, Experience, Incident
+from Cortex.procedure import load_procedure
+from Cortex.reflection import check_recurrence_despite_no_diff, reflect
 
 log = config.get_logger("cortex.graph")
 from IPython.display import display

@@ -8,8 +8,8 @@ Real implementation is intentionally left as clearly-marked TODOs —
 don't guess at DataHub's exact GraphQL schema from memory; check the
 live docs/schema once you're actually wired up.
 """
-from cortex import config
-from cortex.models import AssetSnapshot
+from Cortex import config
+from Cortex.models import AssetSnapshot
 
 log = config.get_logger("cortex.memory_semantic")
 

@@ -3,8 +3,8 @@ The comparison logic behind 'what changed since the last time this
 worked'. Kept as one small pure function — easy to unit test in
 isolation, no I/O, no side effects.
 """
-from cortex import config
-from cortex.models import AssetSnapshot, DiffResult
+from Cortex import config
+from Cortex.models import AssetSnapshot, DiffResult
 
 log = config.get_logger("cortex.diff")
 

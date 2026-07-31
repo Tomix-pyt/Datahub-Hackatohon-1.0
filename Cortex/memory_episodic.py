@@ -12,8 +12,8 @@ import re
 
 import chromadb
 
-from cortex import config
-from cortex.models import Experience
+from Cortex import config
+from Cortex.models import Experience
 
 log = config.get_logger("cortex.memory_episodic")
 

@@ -3,10 +3,10 @@ The gatekeeper. This is the single most important node in the whole
 system to get right — everything else can be simple as long as this
 stays disciplined about what earns a place in DataHub.
 """
-from cortex import config
-from cortex.diff import compute_diff
-from cortex.memory_semantic import DataHubClient
-from cortex.models import AssetSnapshot, Experience
+from Cortex import config
+from Cortex.diff import compute_diff
+from Cortex.memory_semantic import DataHubClient
+from Cortex.models import AssetSnapshot, Experience
 
 log = config.get_logger("cortex.reflection")
 

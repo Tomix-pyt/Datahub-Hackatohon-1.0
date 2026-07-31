@@ -1,0 +1,12 @@
+[project]
+name = "datahub-hackatohon-1-0"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "acryl-datahub>=1.6.0.15",
+    "chromadb>=1.5.9",
+    "datahub>=0.999.1",
+    "ipython>=9.16.0",
+]

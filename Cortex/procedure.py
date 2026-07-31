@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from cortex import config
+from Cortex import config
 
 log = config.get_logger("cortex.procedure")
 
