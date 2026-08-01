@@ -1,4 +1,9 @@
 """
+Wraps DataHub. In MOCK_MODE (default), returns canned fixture data so
+you can develop and debug graph.py without a live DataHub instance.
+Flip CORTEX_MOCK_MODE=false and fill in DATAHUB_GMS_URL / DATAHUB_TOKEN
+in .env once you're testing against the real Cloud trial.
+
 Real implementation is intentionally left as clearly-marked TODOs —
 don't guess at DataHub's exact GraphQL schema from memory; check the
 live docs/schema once you're actually wired up.
@@ -74,15 +79,9 @@ class DataHubClient:
         if self.mock:
             log.info("DataHubClient running in MOCK_MODE — no live DataHub calls will be made")
         else:
-            # TODO: initialize real client, e.g. DataHub's Python SDK or a
-            # GraphQL client pointed at config.DATAHUB_GMS_URL with
-            # config.DATAHUB_TOKEN. Check current DataHub docs for the
-            # exact client class/auth pattern before wiring this up.
-            raise NotImplementedError(
-                "Real DataHub client not yet implemented. "
-                "Set CORTEX_MOCK_MODE=true while developing, or implement "
-                "this branch once you're testing against the Cloud trial."
-            )
+            from datahub.sdk import DataHubClient as RealDataHubClient
+            self.client = RealDataHubClient.from_env()
+            log.info("DataHubClient connected to live DataHub instance")
 
     def get_asset_snapshot(self, urn: str) -> AssetSnapshot:
         """Fetch current structural state of an asset for diffing/storage."""
@@ -104,22 +103,74 @@ class DataHubClient:
             log.debug(f"Mock snapshot for {urn} (version={version}): {snapshot}")
             return snapshot
 
-        raise NotImplementedError  # TODO: real GraphQL query
+        # Real path — uses only methods confirmed to exist on the
+        # installed SDK (dataset.upstreams, dataset.last_modified,
+        # dataset.schema). Downstream lookup isn't wired yet — that
+        # needs the SDK's lineage_client, which hasn't been verified
+        # against your installed version, so it's left as an explicit
+        # TODO rather than guessed.
+        dataset = self.client.entities.get(urn)
+
+        upstream_urns = []
+        if dataset.upstreams and dataset.upstreams.upstreams:
+            upstream_urns = [u.dataset for u in dataset.upstreams.upstreams]
+
+        # dataset.schema returns SchemaField objects — exact attribute
+        # names for field name/type aren't confirmed yet, so fall back
+        # to str() per field if the expected attributes aren't there.
+        schema_fields = []
+        try:
+            for field in (dataset.schema or []):
+                schema_fields.append(f"{field.field_path}:{field.native_type}")
+        except AttributeError:
+            log.warning(
+                "SchemaField attribute names not confirmed against this SDK "
+                "version — falling back to str() representation. Run "
+                "`dir(dataset.schema[0])` to find the real attribute names "
+                "and tighten this up."
+            )
+            schema_fields = [str(f) for f in (dataset.schema or [])]
+
+        snapshot = AssetSnapshot(
+            asset_urn=urn,
+            upstream_urns=sorted(upstream_urns),
+            downstream_urns=[],  # TODO: wire via lineage_client once its API is confirmed
+            schema_fields=sorted(schema_fields),
+            model_logic_hash=None,  # TODO: not available via this SDK path yet
+            last_run_status=str(dataset.last_modified),
+        )
+        log.info(f"Live snapshot for {urn}: {len(upstream_urns)} upstream, last_modified={dataset.last_modified}")
+        return snapshot
 
     def write_lesson(self, asset_urn: str, lesson: dict) -> None:
         """
         Write (or update) a generalized, promoted lesson attached to an
-        asset. This is Reflect/Promote's write target — NOT where raw
-        experiences go (those live in episodic memory unconditionally).
+        asset. Uses DataHub's native Document entity (AI-agent-facing
+        context, hidden from normal search via show_in_global_context=False)
+        rather than a bespoke custom aspect — this is a stronger DataHub
+        integration story since it's DataHub's own built-in primitive for
+        exactly this purpose.
         """
         if self.mock:
             _MOCK_PROMOTED_LESSONS.setdefault(asset_urn, []).append(lesson)
             log.info(f"[MOCK WRITE] Promoted lesson to DataHub asset {asset_urn}: {lesson}")
             return
 
-        raise NotImplementedError  # TODO: real custom-aspect write via DataHub API
+        from datahub.sdk import Document
+
+        doc = Document.create_document(
+            id=f"cortex-lesson-{lesson.get('source_experience_ids', ['unknown'])[0]}",
+            title=f"Cortex lesson: {lesson.get('lesson', '')[:60]}",
+            text=f"{lesson.get('lesson', '')}\n\nFix: {lesson.get('fix', '')}\n"
+                 f"Observed: {lesson.get('observed_count')}x, success rate {lesson.get('success_rate')}",
+            related_assets=[asset_urn],
+            show_in_global_context=False,
+        )
+        self.client.entities.upsert(doc)
+        log.info(f"Wrote promoted lesson as Document, attached to {asset_urn}")
 
     def get_promoted_lessons(self, asset_urn: str) -> list[dict]:
         if self.mock:
             return _MOCK_PROMOTED_LESSONS.get(asset_urn, [])
-        raise NotImplementedError
+        raise NotImplementedError  # TODO: query Documents related to this asset
+

@@ -15,7 +15,7 @@ load_dotenv()
 # deterministic responses (see cortex/memory_semantic.py and cortex/llm.py).
 # This lets the whole pipeline run offline, with no API keys, so you can
 # debug graph.py logic in isolation before touching real services.
-MOCK_MODE = os.getenv("CORTEX_MOCK_MODE", "true").lower() == "true"
+MOCK_MODE = os.getenv("CORTEX_MOCK_MODE", "true").lower() == "false"
 
 # --- DataHub ---
 DATAHUB_GMS_URL = os.getenv("DATAHUB_GMS_URL", "")

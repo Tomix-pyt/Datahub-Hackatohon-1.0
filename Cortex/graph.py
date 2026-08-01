@@ -18,7 +18,6 @@ import io
 from PIL import Image
 from typing import Optional, TypedDict
 
-
 from langgraph.graph import END, StateGraph
 
 from Cortex import config
@@ -57,7 +56,6 @@ class CortexState(TypedDict, total=False):
     experience: Experience
     should_promote: bool
     promote_reason: str
-
 
 
 # --- Nodes --------------------------------------------------------------
