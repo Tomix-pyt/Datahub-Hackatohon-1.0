@@ -1,0 +1,23 @@
+[project]
+name = "cortex"
+version = "0.1.0"
+description = "An agent that remembers not just the solution, but the shortest path to finding it."
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph>=0.2",
+    "chromadb>=0.5",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "langchain-groq>=0.2",
+    "acryl-datahub>=1.6.0.17",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools]
+packages = ["cortex"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

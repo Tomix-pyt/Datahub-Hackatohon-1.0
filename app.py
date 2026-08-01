@@ -1,4 +1,7 @@
 """
+Run this first, before touching anything else:
+
+    python app.py
 
 Demonstrates all three real paths in one run, with zero API keys:
   1. COLD START      — brand new incident, full investigation
@@ -11,8 +14,8 @@ Each run uses an auto-approve HITL callback so this runs unattended;
 swap `always_approve` for a real input()-based prompt (or your UI's
 confirm handler) when you want to click through it interactively.
 """
-from Cortex.graph import run_incident
-from Cortex.models import Incident
+from cortex.graph import run_incident
+from cortex.models import Incident
 
 
 def always_approve(incident, fix) -> bool:
