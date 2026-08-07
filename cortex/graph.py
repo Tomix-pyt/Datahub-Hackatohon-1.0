@@ -237,58 +237,6 @@ def investigate(state: CortexState) -> CortexState:
         "nodes_visited": nodes_visited,
         "reused_fix": False,
     }
-def investigate(state: CortexState) -> CortexState:
-    """
-    Performs multi-hop graph traversal (upstream and downstream), gathers evidence
-    across all connected nodes, isolates the culprit asset, and diagnoses root cause.
-    """
-    incident = state["incident"]
-    datahub = DataHubClient()
-    seed = state.get("diff_details")
-
-    log.info(f"[INVESTIGATE] Initiating multi-hop graph walk from {incident.trigger_asset_urn}")
-    
-    # 1. Traversal: Walk upstream and downstream lineage graph (max_depth=2)
-    lineage_snapshots = traverse_lineage_graph(incident.trigger_asset_urn, datahub, max_depth=2)
-    nodes_visited = len(lineage_snapshots)
-    log.info(f"[INVESTIGATE] Lineage traversal complete — visited {nodes_visited} graph nodes")
-
-    # 2. Bundle evidence for diagnosis
-    current_snapshot = lineage_snapshots.get(incident.trigger_asset_urn) or datahub.get_asset_snapshot(incident.trigger_asset_urn)
-    lineage_dict = {urn: dataclasses.asdict(snap) for urn, snap in lineage_snapshots.items()}
-
-    # 3. LLM Diagnosis grounded in multi-hop graph evidence
-    root_cause = diagnose_root_cause(
-        description=incident.description,
-        current_snapshot=dataclasses.asdict(current_snapshot),
-        diff_details=seed,
-        lineage_graph=lineage_dict,
-    )
-
-    # 4. Triage Re-classification (if incident started as generic/unclassified)
-    updated_procedure = state.get("procedure")
-    if incident.incident_type == "unclassified":
-        if seed and seed.get("schema"):
-            incident.incident_type = "schema_drift"
-        elif "SLA" in root_cause or "freshness" in root_cause.lower():
-            incident.incident_type = "freshness"
-        
-        log.info(f"[TRIAGE] Incident auto-classified as: {incident.incident_type}")
-        updated_procedure = load_procedure(incident.incident_type)
-
-    log.info(f"[INVESTIGATE] Root cause identified: {root_cause}")
-
-    return {
-        "incident": incident,
-        "procedure": updated_procedure,
-        "current_snapshot": current_snapshot,
-        "lineage_graph": lineage_dict,
-        "root_cause": root_cause,
-        "nodes_visited": nodes_visited,
-        "reused_fix": False,
-    }
-
-
 def propose_fix(state: CortexState) -> CortexState:
     if state.get("reused_fix"):
         return {}

@@ -98,7 +98,6 @@ class DataHubClient:
                 upstream_urns=asset["upstream"],
                 downstream_urns=asset["downstream"],
                 schema_fields=sorted(asset[f"schema_{version}"]),
-                model_logic_hash=asset[f"model_logic_hash_{version}"],
                 last_run_status=asset["last_run_status"],
             )
             log.debug(f"Mock snapshot for {urn} (version={version}): {snapshot}")

@@ -27,10 +27,6 @@ def compute_diff(old: AssetSnapshot, current: AssetSnapshot) -> DiffResult:
         result.structural_diff = True
         result.details["schema"] = f"{old.schema_fields} -> {current.schema_fields}"
 
-    if old.model_logic_hash != current.model_logic_hash:
-        result.logic_diff = True
-        result.details["logic_hash"] = f"{old.model_logic_hash} -> {current.model_logic_hash}"
-
     if old.last_run_status != current.last_run_status:
         result.run_status_diff = True
         result.details["run_status"] = f"{old.last_run_status} -> {current.last_run_status}"
