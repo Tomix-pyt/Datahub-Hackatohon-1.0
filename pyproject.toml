@@ -10,6 +10,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "langchain-groq>=0.2",
     "acryl-datahub>=1.6.0.17",
+    "pytest>=9.1.1",
 ]
 
 [project.optional-dependencies]

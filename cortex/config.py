@@ -15,7 +15,7 @@ load_dotenv()
 # deterministic responses (see cortex/memory_semantic.py and cortex/llm.py).
 # This lets the whole pipeline run offline, with no API keys, so you can
 # debug graph.py logic in isolation before touching real services.
-MOCK_MODE = os.getenv("CORTEX_MOCK_MODE", "true").lower() == "true"
+MOCK_MODE = os.getenv("CORTEX_MOCK_MODE", "true").lower() == "false"
 
 # --- DataHub ---
 DATAHUB_GMS_URL = os.getenv("DATAHUB_GMS_URL", "")
@@ -40,7 +40,7 @@ PROCEDURES_DIR = os.getenv("PROCEDURES_DIR", "./procedures")
 # Verbose by default. This project lives or dies on being debuggable,
 # so every node in the graph logs what it did and why.
 logging.basicConfig(
-    level=logging.DEBUG if os.getenv("CORTEX_DEBUG", "true").lower() == "true" else logging.INFO,
+    level=logging.DEBUG if os.getenv("CORTEX_DEBUG", "true").lower() == "false" else logging.INFO,
     format="%(asctime)s | %(levelname)-7s | %(name)-22s | %(message)s",
     datefmt="%H:%M:%S",
 )

@@ -22,7 +22,7 @@ LLM) and demonstrates the three real paths:
 
 1. **Cold start** — brand new incident, full investigation
 2. **Clean reuse** — same failure pattern on a *different* asset →
-   instant reuse (this is the fast path judges should see)
+   instant reuse
 3. **Contradiction** — the *same* asset breaks again with nothing
    changed → Cortex refuses to blindly reuse the old fix and flags it
    for human review instead

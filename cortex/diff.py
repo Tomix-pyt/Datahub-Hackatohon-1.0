@@ -3,6 +3,9 @@ The comparison logic behind 'what changed since the last time this
 worked'. Kept as one small pure function — easy to unit test in
 isolation, no I/O, no side effects.
 """
+from dataclasses import dataclass, field
+from typing import Any, Dict
+
 from cortex import config
 from cortex.models import AssetSnapshot, DiffResult
 
@@ -38,3 +41,50 @@ def compute_diff(old: AssetSnapshot, current: AssetSnapshot) -> DiffResult:
         log.info("No diff found between stored snapshot and current state")
 
     return result
+
+def compute_lineage_diff(
+    target_snapshot: dict, lineage_graph: dict) -> dict:
+    """Computes schema mismatches and freshness delays between target asset and upstream parents."""
+    target_fields = {
+        f.split(":")[0]: f.split(":")[1] if ":" in f else "UNKNOWN"
+        for f in target_snapshot.get("schema_fields", [])
+    }
+    mismatches = []
+    upstream_summaries = {}
+
+    # 1. Compare target against immediate upstream producers
+    for upstream_urn in target_snapshot.get("upstream_urns", []):
+        if upstream_urn in lineage_graph:
+            up_snap = lineage_graph[upstream_urn]
+            up_fields = {
+                f.split(":")[0]: f.split(":")[1] if ":" in f else "UNKNOWN"
+                for f in up_snap.get("schema_fields", [])
+            }
+
+            # Store compact upstream field list (top 10 sample)
+            upstream_summaries[upstream_urn] = up_snap.get("schema_fields", [])[
+                :10
+            ]
+
+            # Detect missing or type-mismatched columns
+            for col, dtype in target_fields.items():
+                if col not in up_fields:
+                    mismatches.append(
+                        f"Target column '{col}' missing from upstream parent ({upstream_urn.split(',')[-1]})"
+                    )
+                elif up_fields[col] != dtype:
+                    mismatches.append(
+                        f"Type mismatch on '{col}': target is {dtype}, upstream parent is {up_fields[col]}"
+                    )
+
+    # 2. Freshness check
+    target_age = target_snapshot.get("freshness_age_hours", 0) or 0
+    is_stale = target_age > 24.0
+
+    return {
+        "lineage_schema_mismatches": mismatches,
+        "upstream_schema_summaries": upstream_summaries,
+        "freshness": {
+            "last_modified": target_snapshot.get("last_modified"),
+            "age_hours": target_age,
+            "is_stale": is_stale,}}

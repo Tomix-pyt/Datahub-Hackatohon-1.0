@@ -582,6 +582,7 @@ dependencies = [
     { name = "chromadb" },
     { name = "langchain-groq" },
     { name = "langgraph" },
+    { name = "pytest" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
@@ -597,6 +598,7 @@ requires-dist = [
     { name = "chromadb", specifier = ">=0.5" },
     { name = "langchain-groq", specifier = ">=0.2" },
     { name = "langgraph", specifier = ">=0.2" },
+    { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },

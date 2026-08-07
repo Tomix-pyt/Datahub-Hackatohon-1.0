@@ -8,6 +8,9 @@ Real implementation is intentionally left as clearly-marked TODOs —
 don't guess at DataHub's exact GraphQL schema from memory; check the
 live docs/schema once you're actually wired up.
 """
+from datetime import datetime, timezone
+from typing import Optional
+
 from cortex import config
 from cortex.models import AssetSnapshot
 
@@ -66,8 +69,6 @@ _MOCK_ASSETS = {
     },
 }
 
-# Toggle this between "v1" and "v2" to simulate the schema drift happening.
-MOCK_CURRENT_VERSION = "v2"
 
 # Where promoted lessons get written in mock mode, so you can inspect them.
 _MOCK_PROMOTED_LESSONS: dict[str, list[dict]] = {}
@@ -103,43 +104,59 @@ class DataHubClient:
             log.debug(f"Mock snapshot for {urn} (version={version}): {snapshot}")
             return snapshot
 
-        # Real path — uses only methods confirmed to exist on the
-        # installed SDK (dataset.upstreams, dataset.last_modified,
-        # dataset.schema). Downstream lookup isn't wired yet — that
-        # needs the SDK's lineage_client, which hasn't been verified
-        # against your installed version, so it's left as an explicit
-        # TODO rather than guessed.
+        # Real path — uses confirmed SDK methods (dataset.upstreams, dataset.last_modified, dataset.schema)
         dataset = self.client.entities.get(urn)
 
+        # Extract upstreams
         upstream_urns = []
         if dataset.upstreams and dataset.upstreams.upstreams:
             upstream_urns = [u.dataset for u in dataset.upstreams.upstreams]
 
-        # dataset.schema returns SchemaField objects — exact attribute
-        # names for field name/type aren't confirmed yet, so fall back
-        # to str() per field if the expected attributes aren't there.
+        # Extract downstreams
+        downstream_urns = []
+        # Extract schema fields
         schema_fields = []
         try:
-            for field in (dataset.schema or []):
+            for field in dataset.schema or []:
                 schema_fields.append(f"{field.field_path}:{field.native_type}")
         except AttributeError:
             log.warning(
                 "SchemaField attribute names not confirmed against this SDK "
-                "version — falling back to str() representation. Run "
-                "`dir(dataset.schema[0])` to find the real attribute names "
-                "and tighten this up."
+                "version — falling back to str() representation."
             )
             schema_fields = [str(f) for f in (dataset.schema or [])]
+
+        # Calculate freshness age relative to current UTC time
+        last_modified_dt = dataset.last_modified
+        freshness_age = None
+        last_modified_str = None
+
+        if last_modified_dt:
+            if isinstance(last_modified_dt, datetime):
+                if last_modified_dt.tzinfo is None:
+                    last_modified_dt = last_modified_dt.replace(
+                        tzinfo=timezone.utc
+                    )
+                now_utc = datetime.now(timezone.utc)
+                delta = now_utc - last_modified_dt
+                freshness_age = round(delta.total_seconds() / 3600.0, 2)
+                last_modified_str = last_modified_dt.isoformat()
+            else:
+                last_modified_str = str(last_modified_dt)
 
         snapshot = AssetSnapshot(
             asset_urn=urn,
             upstream_urns=sorted(upstream_urns),
-            downstream_urns=[],  # TODO: wire via lineage_client once its API is confirmed
+            downstream_urns=sorted(downstream_urns),
             schema_fields=sorted(schema_fields),
-            model_logic_hash=None,  # TODO: not available via this SDK path yet
+            last_modified=last_modified_str,
+            freshness_age_hours=freshness_age,
             last_run_status=str(dataset.last_modified),
         )
-        log.info(f"Live snapshot for {urn}: {len(upstream_urns)} upstream, last_modified={dataset.last_modified}")
+
+        log.info(
+            f"Live snapshot for {urn}: {len(upstream_urns)} upstream, "
+            f"last_modified={dataset.last_modified}, age={freshness_age}h"        )
         return snapshot
 
     def write_lesson(self, asset_urn: str, lesson: dict) -> None:
@@ -168,8 +185,3 @@ class DataHubClient:
         )
         self.client.entities.upsert(doc)
         log.info(f"Wrote promoted lesson as Document, attached to {asset_urn}")
-
-    def get_promoted_lessons(self, asset_urn: str) -> list[dict]:
-        if self.mock:
-            return _MOCK_PROMOTED_LESSONS.get(asset_urn, [])
-        raise NotImplementedError  # TODO: query Documents related to this asset

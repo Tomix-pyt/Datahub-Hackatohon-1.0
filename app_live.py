@@ -26,6 +26,8 @@ from cortex.graph import run_incident
 from cortex.models import Incident
 
 TARGET_URN = "urn:li:dataset:(urn:li:dataPlatform:snowflake,b2fd91.order_entry_db.analytics.order_details,PROD)"
+TEST_URN = "urn:li:dataset:(urn:li:dataPlatform:dbt,b2fd91.order_entry_db.order_entry.promotions,PROD)"
+TEST_URN2 = 'urn:li:dataset:(urn:li:dataPlatform:snowflake,b2fd91.order_entry_db.order_entry.countries,PROD)'
 
 
 def approve_in_terminal(incident, fix) -> bool:
@@ -40,15 +42,14 @@ def approve_in_terminal(incident, fix) -> bool:
 
 def main():
     incident = Incident(
-        incident_type="freshness",
         trigger_asset_urn=TARGET_URN,
-        description="order_details analytics table has not refreshed recently — downstream PowerBI report may show stale totals",
+        description="one of my dashboards is broken",
     )
 
     result = run_incident(incident, hitl_approve_fn=approve_in_terminal)
 
     print(f"\n{'='*60}")
-    print(f"root_cause:    {result['root_cause']}")
+    print(f"root_cause:    {result['incident'].incident_type}")
     print(f"reused_fix:    {result.get('reused_fix', False)}")
     print(f"nodes_visited: {result.get('nodes_visited')}")
     print(f"outcome:       {result.get('outcome')}")

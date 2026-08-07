@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List, Dict
 
 
 def _now() -> str:
@@ -25,7 +25,7 @@ class Incident:
     """What triggered Cortex to run."""
     id: str = field(default_factory=lambda: _new_id("inc"))
     incident_type: str = "unclassified"        # e.g. "schema_drift" — must match a procedures/*.yaml
-    trigger_asset_urn: str = ""                  # the DataHub asset that broke
+    trigger_asset_urn: str = ""                  # the DataHub asset that is affected
     description: str = ""                        # human-readable symptom, e.g. "Revenue Dashboard shows $0"
     timestamp: str = field(default_factory=_now)
 
@@ -43,12 +43,29 @@ class AssetSnapshot:
     rigorous but most of the extra fields don't have a clean DataHub
     source and aren't worth the build time for a hackathon MVP.
     """
-    asset_urn: str = ""
-    upstream_urns: list[str] = field(default_factory=list)
-    downstream_urns: list[str] = field(default_factory=list)
-    schema_fields: list[str] = field(default_factory=list)   # sorted "name:type" strings
-    model_logic_hash: Optional[str] = None                     # hash of compiled dbt SQL, if available
-    last_run_status: Optional[str] = None                      # "success" | "failed" | "unknown"
+    asset_urn: str
+    upstream_urns: List[str] = field(default_factory=list)
+    downstream_urns: List[str] = field(default_factory=list)
+    schema_fields: List[str] = field(default_factory=list)
+    last_modified: Optional[str] = None
+    # NEW: Compact upstream schema summaries and freshness calculations
+    upstream_schemas: Dict[str, List[str]] = field(
+        default_factory=dict
+    )  # {urn: ['col1:TYPE', ...]}
+    freshness_age_hours: Optional[float] = None
+    last_run_status: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "asset_urn": self.asset_urn,
+            "upstream_urns": self.upstream_urns,
+            "downstream_urns": self.downstream_urns,
+            "schema_fields": self.schema_fields,
+            "last_modified": self.last_modified,
+            "upstream_schemas": self.upstream_schemas,
+            "freshness_age_hours": self.freshness_age_hours,
+            "last_run_status": self.last_run_status,
+        }
 
 
 @dataclass
@@ -80,6 +97,7 @@ class Experience:
 
     novel: bool = True
     promoted: bool = False
+    evidence_context: dict = field(default_factory=dict)  # what evidence was used to reach this root cause/fix
 
     embedding_text: str = ""                         # what actually got embedded, for debugging retrieval
 
