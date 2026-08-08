@@ -11,21 +11,22 @@ from cortex.models import AssetSnapshot, Experience
 log = config.get_logger("cortex.reflection")
 
 
-def reflect(experience: Experience) -> tuple[bool, str]:
-    """
-    Should this experience be promoted (generalized + written to DataHub)?
-    Returns (should_promote, reason).
-    """
-    if not experience.fix_applied:
-        return False, "fix was not applied — nothing proven yet"
+# def reflect(experience: Experience) -> tuple[bool, str]:
+#     """
+#     Should this experience be promoted (generalized + written to DataHub)?
+#     Returns (should_promote, reason).
+#     """
+#     if not experience.fix_applied:
+#         return False, "fix was not applied — nothing proven yet"
 
-    if experience.outcome != "success":
-        return False, f"outcome was '{experience.outcome}', not a validated success"
+#     if experience.outcome != "success":
+#         return False, f"outcome was '{experience.outcome}', not a validated success"
 
-    if not experience.novel:
-        return False, "duplicate of an existing lesson — will increment observed_count instead"
+#     if not experience.novel:
+#         return False, "duplicate of an existing lesson — will increment observed_count instead"
 
-    return True, "validated success on a novel pattern — promoting"
+#     return True, "validated success on a novel pattern — promoting"
+
 
 
 def check_recurrence_despite_no_diff(

@@ -38,9 +38,60 @@ def compute_diff(old: AssetSnapshot, current: AssetSnapshot) -> DiffResult:
 
     return result
 
-def compute_lineage_diff(
-    target_snapshot: dict, lineage_graph: dict) -> dict:
-    """Computes schema mismatches and freshness delays between target asset and upstream parents."""
+# def compute_lineage_diff(
+#     target_snapshot: dict, lineage_graph: dict) -> dict:
+#     """Computes schema mismatches and freshness delays between target asset and upstream parents."""
+#     target_fields = {
+#         f.split(":")[0]: f.split(":")[1] if ":" in f else "UNKNOWN"
+#         for f in target_snapshot.get("schema_fields", [])
+#     }
+#     mismatches = []
+#     upstream_summaries = {}
+
+#     # 1. Compare target against immediate upstream producers
+#     for upstream_urn in target_snapshot.get("upstream_urns", []):
+#         if upstream_urn in lineage_graph:
+#             up_snap = lineage_graph[upstream_urn]
+#             up_fields = {
+#                 f.split(":")[0]: f.split(":")[1] if ":" in f else "UNKNOWN"
+#                 for f in up_snap.get("schema_fields", [])
+#             }
+
+#             # Store compact upstream field list (top 10 sample)
+#             upstream_summaries[upstream_urn] = up_snap.get("schema_fields", [])[
+#                 :10
+#             ]
+
+#             # Detect missing or type-mismatched columns
+#             for col, dtype in target_fields.items():
+#                 if col not in up_fields:
+#                     mismatches.append(
+#                         f"Target column '{col}' missing from upstream parent ({upstream_urn.split(',')[-1]})"
+#                     )
+#                 elif up_fields[col] != dtype:
+#                     mismatches.append(
+#                         f"Type mismatch on '{col}': target is {dtype}, upstream parent is {up_fields[col]}"
+#                     )
+
+#     # 2. Freshness check
+#     target_age = target_snapshot.get("freshness_age_hours", 0) or 0
+#     is_stale = target_age > 24.0
+
+#     return {
+#         "lineage_schema_mismatches": mismatches,
+#         "upstream_schema_summaries": upstream_summaries,
+#         "freshness": {
+#             "last_modified": target_snapshot.get("last_modified"),
+#             "age_hours": target_age,
+#             "is_stale": is_stale,}}
+
+
+def compute_lineage_diff(target_snapshot: dict, lineage_graph: dict) -> dict:
+    """Computes schema mismatches and freshness delays between target asset and upstream parents.
+
+    Eliminates false positives on joined analytical tables by prioritizing direct
+    transformation parents (e.g. dbt) or aggregating fields across all source parents.
+    """
     target_fields = {
         f.split(":")[0]: f.split(":")[1] if ":" in f else "UNKNOWN"
         for f in target_snapshot.get("schema_fields", [])
@@ -48,32 +99,78 @@ def compute_lineage_diff(
     mismatches = []
     upstream_summaries = {}
 
-    # 1. Compare target against immediate upstream producers
-    for upstream_urn in target_snapshot.get("upstream_urns", []):
-        if upstream_urn in lineage_graph:
-            up_snap = lineage_graph[upstream_urn]
-            up_fields = {
-                f.split(":")[0]: f.split(":")[1] if ":" in f else "UNKNOWN"
-                for f in up_snap.get("schema_fields", [])
-            }
+    # 1. Gather immediate upstream snapshots present in the lineage graph
+    upstream_urns = target_snapshot.get("upstream_urns", [])
+    valid_upstreams = {
+        urn: lineage_graph[urn] for urn in upstream_urns if urn in lineage_graph
+    }
 
-            # Store compact upstream field list (top 10 sample)
-            upstream_summaries[upstream_urn] = up_snap.get("schema_fields", [])[
-                :10
-            ]
+    # Store compact upstream field list (top 10 sample) for metadata tracking
+    for urn, up_snap in valid_upstreams.items():
+        upstream_summaries[urn] = up_snap.get("schema_fields", [])[:10]
 
-            # Detect missing or type-mismatched columns
-            for col, dtype in target_fields.items():
-                if col not in up_fields:
+    # 2. Identify if there is a primary direct transformation parent (e.g., dbt model or matching table name)
+    target_name = target_snapshot.get("asset_urn", "").split(".")[-1]
+    primary_parent_urn = None
+
+    for urn in valid_upstreams:
+        if "dataPlatform:dbt" in urn or urn.split(".")[-1] == target_name:
+            primary_parent_urn = urn
+            break
+
+    # 3. Perform Schema Diffing
+    if primary_parent_urn:
+        # --- Mode A: 1:1 Check against Primary Transformation Model ---
+        p_snap = valid_upstreams[primary_parent_urn]
+        p_fields = {
+            f.split(":")[0]: f.split(":")[1] if ":" in f else "UNKNOWN"
+            for f in p_snap.get("schema_fields", [])
+        }
+        p_short = primary_parent_urn.split(",")[-1]
+
+        # Target columns missing or type-mismatched relative to primary parent
+        for col, dtype in target_fields.items():
+            if col not in p_fields:
+                mismatches.append(
+                    f"Target column '{col}' missing from primary upstream model ({p_short})"
+                )
+            elif p_fields[col] != dtype:
+                mismatches.append(
+                    f"Type mismatch on '{col}': target is {dtype}, primary upstream ({p_short}) is {p_fields[col]}"
+                )
+
+        # Primary parent columns dropped in target asset
+        for p_col in p_fields:
+            if p_col not in target_fields:
+                mismatches.append(
+                    f"Upstream column '{p_col}' in ({p_short}) is missing from target asset"
+                )
+
+    else:
+        # --- Mode B: Aggregated Union Check Across Raw Upstream Sources ---
+        combined_upstream = {}  # {col_name: (dtype, source_urn)}
+        for urn, up_snap in valid_upstreams.items():
+            for f in up_snap.get("schema_fields", []):
+                col_name = f.split(":")[0]
+                col_type = f.split(":")[1] if ":" in f else "UNKNOWN"
+                if col_name not in combined_upstream:
+                    combined_upstream[col_name] = (col_type, urn)
+
+        # Flag target columns that exist in NO upstream source
+        for col, dtype in target_fields.items():
+            if col not in combined_upstream:
+                mismatches.append(
+                    f"Target column '{col}' does not exist in any upstream parent source"
+                )
+            else:
+                up_type, up_urn = combined_upstream[col]
+                if up_type != dtype:
+                    up_short = up_urn.split(",")[-1]
                     mismatches.append(
-                        f"Target column '{col}' missing from upstream parent ({upstream_urn.split(',')[-1]})"
-                    )
-                elif up_fields[col] != dtype:
-                    mismatches.append(
-                        f"Type mismatch on '{col}': target is {dtype}, upstream parent is {up_fields[col]}"
+                        f"Type mismatch on '{col}': target is {dtype}, upstream ({up_short}) is {up_type}"
                     )
 
-    # 2. Freshness check
+    # 4. Freshness Check
     target_age = target_snapshot.get("freshness_age_hours", 0) or 0
     is_stale = target_age > 24.0
 
@@ -83,4 +180,6 @@ def compute_lineage_diff(
         "freshness": {
             "last_modified": target_snapshot.get("last_modified"),
             "age_hours": target_age,
-            "is_stale": is_stale,}}
+            "is_stale": is_stale,
+        },
+    }

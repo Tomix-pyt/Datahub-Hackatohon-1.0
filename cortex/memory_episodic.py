@@ -1,116 +1,151 @@
-"""
-Wraps ChromaDB. Stores raw Experience objects, unconditionally, on
-every run (success or failure, novel or duplicate) — see graph.py's
-`store` node. This is deliberately separate from memory_semantic.py:
-episodic is the complete raw log, semantic (DataHub) only gets the
-generalized, validated lessons that survive the Reflect gate.
-"""
-import dataclasses
-import hashlib
+"""Episodic memory store using ChromaDB for experience vector indexing and retrieval."""
+
 import json
-import re
+import logging
+from typing import Any, Dict, Optional
 
 import chromadb
+from cortex.models import AssetSnapshot, Experience
 
-from cortex import config
-from cortex.models import Experience
-
-log = config.get_logger("cortex.memory_episodic")
-
-# A new EpisodicMemory() gets constructed inside almost every graph node
-# (retrieve, store...). Opening a fresh chromadb.PersistentClient each
-# time hits the same on-disk SQLite file repeatedly within one process
-# and intermittently throws "attempt to write a readonly database" from
-# lock contention. Caching one client per process fixes it cleanly.
-_client = None
+log = logging.getLogger(__name__)
 
 
-def _get_client():
-    global _client
-    if _client is None:
-        if config.CHROMA_PERSIST_DIR == ":memory:":
-            # In-memory client: no on-disk SQLite file, no lock contention.
-            # Tests should use this — it's also just faster and avoids
-            # leaving test artifacts on disk between runs.
-            _client = chromadb.EphemeralClient()
-        else:
-            _client = chromadb.PersistentClient(path=config.CHROMA_PERSIST_DIR)
-    return _client
+def build_experience_embedding_text(exp: Experience) -> str:
+    """Generates a rich structural fingerprint for ChromaDB vector embedding.
 
-
-def reset_client():
-    """For tests: drop the cached client so the next EpisodicMemory()
-    reopens against a freshly-cleaned directory instead of holding
-    stale handles to deleted files."""
-    global _client
-    _client = None
-
-
-def _fake_embedding(text: str, dim: int = 64) -> list[float]:
+    Combines the asset identifier, incident classification, schema signature,
+    lineage mismatches, root cause, and resolved fix into a single semantic string.
     """
-    Deterministic, dependency-free 'embedding' for offline dev/testing,
-    using the hashing trick (bag-of-words -> fixed-size vector by hashing
-    each token into a bucket). Unlike a raw text hash, this DOES preserve
-    similarity: two strings sharing words land close together, which is
-    what retrieval actually needs to demo the warm-recall path.
+    evidence = exp.evidence_context or {}
+    schema_sample = evidence.get("target_schema_sample", [])
+    mismatches = evidence.get("schema_mismatches", [])
+    freshness = evidence.get("freshness", {})
 
-    Swap for a real embedding model (sentence-transformers, or an
-    Anthropic/OpenAI embeddings call) before the real demo — this is
-    intentionally crude, just enough to prove the plumbing works.
-    """
-    vec = [0.0] * dim
-    tokens = re.findall(r"[a-z0-9_]+", text.lower())
-    for token in tokens:
-        bucket = int(hashlib.md5(token.encode()).hexdigest(), 16) % dim
-        vec[bucket] += 1.0
-    return vec
+    return (
+        f"Asset URN: {exp.trigger_asset_urn}\n"
+        f"Incident Type: {exp.incident_type}\n"
+        f"Schema Signature: {schema_sample}\n"
+        f"Observed Diffs: {mismatches}\n"
+        f"Staleness Age (Hours): {freshness.get('age_hours')}\n"
+        f"Root Cause: {exp.root_cause}\n"
+        f"Proposed Fix: {exp.fix_proposed}"
+    )
 
 
 class EpisodicMemory:
-    def __init__(self):
-        self.client = _get_client()
-        self.collection = self.client.get_or_create_collection(
-            "cortex_experiences",
-            metadata={"hnsw:space": "cosine"},  # so distance -> similarity is a clean 1 - distance
-        )
-        log.info(f"EpisodicMemory ready ({self.collection.count()} experiences on disk)")
+    """ChromaDB-backed vector memory for storing and retrieving historical Cortex experiences."""
 
-    def add(self, experience: Experience) -> None:
-        embedding = _fake_embedding(experience.embedding_text)
-        # dataclasses.asdict recurses into nested dataclasses (like the
-        # embedded AssetSnapshot) and turns them into plain dicts, unlike
-        # experience.__dict__ which leaves nested dataclass objects intact
-        # and unserializable — that mismatch was silently corrupting what
-        # got stored and breaking the read-back on the next run.
+    def __init__(
+        self,
+        persist_directory: str = ".chroma_db",
+        collection_name: str = "cortex_experiences",
+    ):
+        self.client = chromadb.PersistentClient(path=persist_directory)
+        self.collection = self.client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+        count = self.collection.count()
+        log.info(
+            f"EpisodicMemory ready ({count} experiences on disk in '{collection_name}')"
+        )
+
+    def save(self, experience: Experience) -> None:
+        """Saves an experience to ChromaDB using its rich structural fingerprint."""
+        # Generate and assign the rich embedding text
+        experience.embedding_text = build_experience_embedding_text(experience)
+
+        # ChromaDB metadatas require flat primitive values (str, int, float, bool)
+        metadata: Dict[str, Any] = {
+            "incident_id": experience.incident_id or "",
+            "incident_type": experience.incident_type or "unclassified",
+            "trigger_asset_urn": experience.trigger_asset_urn or "",
+            "timestamp": experience.timestamp or "",
+            "procedure_used": experience.procedure_used or "default",
+            "root_cause": experience.root_cause or "",
+            "fix_proposed": experience.fix_proposed or "",
+            "fix_applied": bool(experience.fix_applied),
+            "outcome": experience.outcome or "pending",
+            "nodes_visited": int(experience.nodes_visited or 0),
+            "novel": bool(experience.novel),
+            "promoted": bool(experience.promoted),
+            # JSON serialize complex structures for metadata compliance
+            "evidence_context_json": json.dumps(experience.evidence_context or {}),
+            "snapshot_json": json.dumps(
+                experience.snapshot.to_dict() if experience.snapshot else {}
+            ),
+        }
+
         self.collection.add(
             ids=[experience.id],
-            embeddings=[embedding],
-            metadatas=[{"raw": json.dumps(dataclasses.asdict(experience), default=str)}],
             documents=[experience.embedding_text],
+            metadatas=[metadata],
         )
-        log.debug(f"Stored experience {experience.id}: '{experience.embedding_text}'")
+        log.info(
+            f"[EPISODIC MEMORY] Saved experience {experience.id} with rich structural fingerprint."
+        )
 
-    def query(self, text: str, top_k: int = 3) -> list[dict]:
-        """
-        Returns a list of {experience: dict, score: float}, best match
-        first. score is a similarity in [0, 1] — higher is more similar.
+    def search(
+        self, query_fingerprint: str, threshold: float = 0.75
+    ) -> Optional[Experience]:
+        """Queries ChromaDB using a composite incident fingerprint.
+
+        Returns the top matching Experience if its cosine similarity score
+        meets or exceeds the threshold; otherwise returns None.
         """
         if self.collection.count() == 0:
-            log.debug("Episodic memory is empty — nothing to retrieve yet")
-            return []
+            log.info("[EPISODIC MEMORY] Collection is empty — returning no precedent")
+            return None
 
-        embedding = _fake_embedding(text)
-        result = self.collection.query(
-            query_embeddings=[embedding],
-            n_results=min(top_k, self.collection.count()),
+        results = self.collection.query(
+            query_texts=[query_fingerprint],
+            n_results=1,
         )
 
-        matches = []
-        for i in range(len(result["ids"][0])):
-            distance = result["distances"][0][i]
-            score = 1.0 - distance  # chroma default is L2/cosine distance; smaller = more similar
-            raw = json.loads(result["metadatas"][0][i]["raw"])
-            matches.append({"experience": raw, "score": score})
+        if not results or not results.get("ids") or not results["ids"][0]:
+            return None
 
-        log.debug(f"Retrieved {len(matches)} candidate(s) for query '{text}', top score={matches[0]['score']:.3f}")
-        return matches
+        exp_id = results["ids"][0][0]
+        metadata = results["metadatas"][0][0] if results.get("metadatas") else {}
+        document = results["documents"][0][0] if results.get("documents") else ""
+        distance = results["distances"][0][0] if results.get("distances") else 1.0
+
+        # Cosine distance to similarity score conversion
+        similarity_score = round(max(0.0, 1.0 - float(distance)), 4)
+
+        log.info(
+            f"[EPISODIC MEMORY] Candidate match: {exp_id} | Similarity: {similarity_score:.4f} (Threshold: {threshold})"
+        )
+
+        if similarity_score < threshold:
+            log.info(
+                f"[EPISODIC MEMORY] Match score {similarity_score:.4f} below threshold {threshold} — cold path"
+            )
+            return None
+
+        # Reconstruct AssetSnapshot from JSON if present
+        snapshot_data = json.loads(metadata.get("snapshot_json", "{}"))
+        snapshot = AssetSnapshot.to_dict(snapshot_data) if snapshot_data else None
+
+        # Reconstruct Experience object
+        experience = Experience(
+            id=exp_id,
+            incident_id=metadata.get("incident_id", ""),
+            incident_type=metadata.get("incident_type", "unclassified"),
+            trigger_asset_urn=metadata.get("trigger_asset_urn", ""),
+            timestamp=metadata.get("timestamp", ""),
+            procedure_used=metadata.get("procedure_used", "default"),
+            snapshot=snapshot,
+            root_cause=metadata.get("root_cause", ""),
+            fix_proposed=metadata.get("fix_proposed", ""),
+            fix_applied=metadata.get("fix_applied", False),
+            outcome=metadata.get("outcome", "pending"),
+            nodes_visited=metadata.get("nodes_visited", 0),
+            similarity_score=similarity_score,
+            novel=metadata.get("novel", True),
+            promoted=metadata.get("promoted", False),
+            evidence_context=json.loads(metadata.get("evidence_context_json", "{}")),
+            embedding_text=document,
+        )
+
+        return experience

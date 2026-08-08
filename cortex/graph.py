@@ -18,49 +18,58 @@ Features:
 """
 
 import dataclasses
-from datetime import datetime
-from time import timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, TypedDict
 import uuid
 
 from langgraph.graph import END, StateGraph
 
 from cortex import config
-from cortex import memory_episodic
 from cortex.diff import compute_diff,compute_lineage_diff
 from cortex.llm import diagnose_root_cause, generate_fix
 from cortex.memory_episodic import EpisodicMemory
 from cortex.memory_semantic import DataHubClient
 from cortex.models import AssetSnapshot, Experience, Incident
 from cortex.procedure import load_procedure
-from cortex.reflection import check_recurrence_despite_no_diff, reflect
+from cortex.reflection import check_recurrence_despite_no_diff
 
 log = config.get_logger("cortex.graph")
 
 # --- State Definition ---------------------------------------------------
 
 class CortexState(TypedDict, total=False):
+    # Incident & Procedure Context
     incident: Incident
     procedure: dict
 
+    # Snapshots & Lineage Traversal
     current_snapshot: AssetSnapshot
     lineage_graph: Dict[str, dict]      # asset_urn -> dict representation of snapshot
-    precedent: Optional[dict]           # best-matching prior experience, if any
+    lineage_evidence: dict             # NEW: Output from compute_lineage_diff() (mismatches & freshness)
+
+    # Episodic Precedent Matching
+    precedent: Optional[Experience]          # Updated: Strongly-typed Experience object
+    matched_precedent: Optional[Experience]  # Alias used in retrieve node
+
+    # Diffing & Verification
     diff_found: bool
     diff_details: dict
     recurrence_flag: bool
     recurrence_reason: str
 
-    culprit_urn: str                    # root cause asset URN discovered via graph traversal
+    # Investigation & Fix Generation
+    culprit_urn: str                    # Root cause asset URN discovered via graph traversal
     root_cause: str
     fix_proposed: str
     reused_fix: bool
     nodes_visited: int
 
+    # Human-in-the-Loop & Execution
     fix_applied: bool
     outcome: str
-    hitl_approve_fn: object             # optional callable(incident, fix) -> bool
+    hitl_approve_fn: object             # Optional callable(incident, fix) -> bool
 
+    # Episodic & Semantic Memory Promotion
     experience: Experience
     should_promote: bool
     promote_reason: str
@@ -102,23 +111,104 @@ def detect(state: CortexState) -> CortexState:
     procedure = load_procedure(incident.incident_type)
     return {"procedure": procedure}
 
+def reflect(state: CortexState) -> CortexState:
+    """Evaluates whether the resolved experience should be promoted to DataHub semantic memory."""
+    experience = state.get("incident")
+    precedent = state.get("matched_precedent") or state.get("precedent")
+    fix_applied = state.get("fix_applied", False)
+
+    # Guardrail 1: Require verified human approval / application
+    if not fix_applied:
+        state["should_promote"] = False
+        state["promote_reason"] = "fix was not applied — nothing proven yet"
+        log.info(f"[REFLECT] Skipped — {state['promote_reason']}")
+        return state
+
+    # Guardrail 2: Only suppress promotion if the EXACT SAME URN already has this exact precedent documented
+    if precedent:
+        is_same_urn = (
+            experience.trigger_asset_urn == precedent.trigger_asset_urn
+        )
+        similarity = getattr(precedent, "similarity_score", 0.0)
+
+        if is_same_urn and similarity >= 0.88:
+            state["should_promote"] = False
+            state["promote_reason"] = (
+                f"Asset URN '{experience.trigger_asset_urn}' already has active "
+                f"documentation from precedent {precedent.id} (score: {similarity:.2f})."
+            )
+            log.info(f"[REFLECT] Skipped — {state['promote_reason']}")
+            return state
+
+    # Passed Gatekeeper — Enable Promotion for DataHub
+    state["should_promote"] = True
+    state["promote_reason"] = (
+        f"Novel verified lesson ready for DataHub semantic memory on asset URN: {experience.trigger_asset_urn}"
+    )
+    log.info(f"[REFLECT] Gatekeeper Approved — {state['promote_reason']}")
+    return state
+
+def build_retrieval_query_fingerprint(
+    incident, current_snapshot, seed_diff: Optional[dict] = None
+) -> str:
+    """Builds a matching query fingerprint at moment-zero using known structural context."""
+    schema_fields = (
+        current_snapshot.schema_fields
+        if hasattr(current_snapshot, "schema_fields")
+        else current_snapshot.get("schema_fields", [])
+    )
+    schema_sample = schema_fields[:10]
+
+    freshness_age = (
+        current_snapshot.freshness_age_hours
+        if hasattr(current_snapshot, "freshness_age_hours")
+        else current_snapshot.get("freshness_age_hours")
+    )
+
+    return (
+        f"Asset URN: {incident.trigger_asset_urn}\n"
+        f"Incident Type: {incident.incident_type}\n"
+        f"Symptom Description: {incident.description}\n"
+        f"Schema Signature: {schema_sample}\n"
+        f"Staleness Age (Hours): {freshness_age}\n"
+        f"Initial Diff Seed: {seed_diff or 'None'}"
+    )
+
 
 def retrieve(state: CortexState) -> CortexState:
     incident = state["incident"]
-    episodic = EpisodicMemory()
+    datahub = DataHubClient()
 
-    query_text = f"{incident.incident_type} on {incident.trigger_asset_urn}: {incident.description}"
-    matches = episodic.query(query_text, top_k=1)
+    current_snapshot = datahub.get_asset_snapshot(incident.trigger_asset_urn)
+    state["current_snapshot"] = current_snapshot
 
-    if matches and matches[0]["score"] >= config.EPISODIC_MATCH_THRESHOLD:
-        precedent = matches[0]["experience"]
-        log.info(f"[RETRIEVE] Precedent found: {precedent['id']} (score={matches[0]['score']:.3f})")
-        return {"precedent": precedent}
+    query_fingerprint = build_retrieval_query_fingerprint(
+        incident=incident,
+        current_snapshot=current_snapshot,
+        seed_diff=state.get("diff_details"),
+    )
 
-    log.info("[RETRIEVE] No precedent found above threshold — cold path")
-    return {"precedent": None}
+    precedent = EpisodicMemory().search(query_fingerprint, threshold=0.75)
 
+    if precedent:
+        is_same_asset = (precedent.trigger_asset_urn == incident.trigger_asset_urn)
+        similarity = getattr(precedent, "similarity_score", 0.0)
 
+        if is_same_asset:
+            log.info(f"[RETRIEVE] Exact Asset Precedent Match ({precedent.id}, score: {similarity:.2f})")
+            state["matched_precedent"] = precedent
+        elif similarity >= 0.88:
+            # High confidence cross-asset pattern reuse
+            log.info(f"[RETRIEVE] High-confidence Cross-Asset Pattern Match from {precedent.trigger_asset_urn}")
+            state["matched_precedent"] = precedent
+        else:
+            # Low/mid confidence from a DIFFERENT asset -> Force full investigation
+            log.info(f"[RETRIEVE] Cross-asset match score {similarity:.2f} below reuse bar — forcing deep investigation.")
+            state["matched_precedent"] = None
+    else:
+        state["matched_precedent"] = None
+
+    return state
 def verify_and_diff(state: CortexState) -> CortexState:
     """Pull current trigger state and compare against precedent snapshot."""
     incident = state["incident"]
@@ -206,25 +296,25 @@ def investigate(state: CortexState) -> CortexState:
     # 5. Triage Re-classification based on computed evidence
     updated_procedure = state.get("procedure")
     if incident.incident_type == "unclassified":
-        has_schema_mismatch = (
-            bool(seed and seed.get("schema")) or 
-            bool(lineage_evidence.get("lineage_schema_mismatches"))
-        )
-        is_freshness_issue = (
-            lineage_evidence.get("freshness", {}).get("is_stale") or
-            "SLA" in root_cause or 
-            "freshness" in root_cause.lower()
-        )
+        has_explicit_schema_seed = bool(seed and seed.get("schema"))
+        is_stale = lineage_evidence.get("freshness", {}).get("is_stale", False)
+        has_schema_mismatches = bool(lineage_evidence.get("lineage_schema_mismatches"))
 
-        if has_schema_mismatch:
+        # Priority 1: Schema Drift (Root cause takes precedence over staleness symptoms)
+        if has_explicit_schema_seed or has_schema_mismatches:
             incident.incident_type = "schema_drift"
-        elif is_freshness_issue:
+
+        # Priority 2: Pure Staleness (Schema is intact, but data is late/stalled)
+        elif is_stale:
             incident.incident_type = "freshness"
-        
+
+        # Priority 3: Fallback based on LLM root cause text analysis
+        elif "schema" in root_cause.lower() or "column" in root_cause.lower():
+            incident.incident_type = "schema_drift"
+        elif "sla" in root_cause.lower() or "freshness" in root_cause.lower() or "stale" in root_cause.lower():
+            incident.incident_type = "freshness"
         log.info(f"[TRIAGE] Incident auto-classified as: {incident.incident_type}")
         updated_procedure = load_procedure(incident.incident_type)
-
-    log.info(f"[INVESTIGATE] Root cause identified: {root_cause}")
 
     # 6. Return state with lineage_evidence included for the store/promote nodes
     return {
@@ -259,67 +349,138 @@ def human_review(state: CortexState) -> CortexState:
     log.info(f"[HUMAN_REVIEW] Human Decision: approved={approved} -> outcome={outcome}")
     return {"fix_applied": approved, "outcome": outcome}
 
+# def store(state: CortexState) -> CortexState:
+#     incident = state["incident"]
+#     root_cause = state["root_cause"]
+#     fix_proposed = state["fix_proposed"]
+#     lineage_evidence = state.get("lineage_evidence", {})
+
+#     # Safely extract schema_fields directly from the AssetSnapshot object
+#     current_snapshot = state.get("current_snapshot")
+#     if hasattr(current_snapshot, "schema_fields"):
+#         schema_fields = current_snapshot.schema_fields or []
+#     elif isinstance(current_snapshot, dict):
+#         schema_fields = current_snapshot.get("schema_fields", [])
+#     else:
+#         schema_fields = []
+
+#     current_utc_timestamp = datetime.now(timezone.utc).isoformat()
+
+#     experience = Experience(
+#         id=f"exp_{uuid.uuid4().hex[:8]}",
+#         timestamp=current_utc_timestamp,
+#         trigger_asset_urn=incident.trigger_asset_urn,
+#         incident_type=state.get("incident_type", "unclassified"),
+#         root_cause=root_cause,
+#         fix_proposed=fix_proposed,
+#         nodes_visited=state.get("nodes_visited", 0),
+#         evidence_context={
+#             "schema_mismatches": lineage_evidence.get("lineage_schema_mismatches", []),
+#             "freshness": lineage_evidence.get("freshness", {}),
+#             "target_schema_sample": schema_fields[:5],  # <--- Safely slices the first 5 fields
+#         },
+#     )
+
+#     EpisodicMemory().save(experience)
+#     state["experience"] = experience
+#     log.info(f"[STORE] Experience {experience.id} saved to Episodic Memory")
+#     return state
 
 def store(state: CortexState) -> CortexState:
+    """Stores the experience into ChromaDB episodic memory."""
     incident = state["incident"]
     root_cause = state["root_cause"]
     fix_proposed = state["fix_proposed"]
     lineage_evidence = state.get("lineage_evidence", {})
+    fix_applied = state.get("fix_applied", False)  # <--- Read fix_applied state
+
+    current_snapshot = state.get("current_snapshot")
+    if hasattr(current_snapshot, "schema_fields"):
+        schema_fields = current_snapshot.schema_fields or []
+    elif isinstance(current_snapshot, dict):
+        schema_fields = current_snapshot.get("schema_fields", [])
+    else:
+        schema_fields = []
+
+    current_utc_timestamp = datetime.now(timezone.utc).isoformat()
 
     experience = Experience(
         id=f"exp_{uuid.uuid4().hex[:8]}",
-        timestamp=datetime.now(timezone.utc).isoformat(),
+        incident_id=incident.id,
+        timestamp=current_utc_timestamp,
         trigger_asset_urn=incident.trigger_asset_urn,
         incident_type=state.get("incident_type", "unclassified"),
         root_cause=root_cause,
         fix_proposed=fix_proposed,
-        # Store full evidence context for episodic memory retrieval
+        fix_applied=fix_applied,  # <--- Pass fix_applied here!
+        outcome=state.get("outcome", "success" if fix_applied else "rejected"),
+        nodes_visited=state.get("nodes_visited", 0),
+        snapshot=current_snapshot
+        if hasattr(current_snapshot, "to_dict")
+        else None,
         evidence_context={
-            "schema_mismatches": lineage_evidence.get("lineage_schema_mismatches", []),
+            "schema_mismatches": lineage_evidence.get(
+                "lineage_schema_mismatches", []
+            ),
             "freshness": lineage_evidence.get("freshness", {}),
-            "target_schema_sample": state["current_snapshot"].get(
-                "schema_fields", []
-            )[:5],
-            "last_run_status": state["current_snapshot"].get("last_run_status"),
-        },)
+            "target_schema_sample": schema_fields[:10],
+        },
+    )
 
-    EpisodicMemory().add(experience)
+    EpisodicMemory().save(experience)
     state["experience"] = experience
+    log.info(f"[STORE] Experience {experience.id} saved to Episodic Memory")
     return state
+
 
 def reflect_node(state: CortexState) -> CortexState:
     should_promote, reason = reflect(state["experience"])
     log.info(f"[REFLECT] Gatekeeper Result: should_promote={should_promote} — Reason: {reason}")
     return {"should_promote": should_promote, "promote_reason": reason}
 
-
-# In cortex/graph.py -> promote() node
-
 def promote(state: CortexState) -> CortexState:
-    experience = state["experience"]
-    datahub = DataHubClient()
+    """Promotes experience to DataHub semantic memory for the affected target URN."""
+    experience = state.get("incident") or state.get("experience")
+    precedent = state.get("matched_precedent") or state.get("precedent")
+    fix_applied = state.get("fix_applied", False)
 
-    # 1. Read existing lesson aspect from DataHub (if present)
-    existing_lesson = datahub.get_promoted_lessons(experience.trigger_asset_urn) or {}
-    prev_count = existing_lesson.get("observed_count", 0)
-    prev_ids = existing_lesson.get("source_experience_ids", [])
+    if not fix_applied:
+        state["should_promote"] = False
+        state["promote_reason"] = "Fix was not approved/applied."
+        log.info(f"[PROMOTE] Skipped — {state['promote_reason']}")
+        return state
 
-    # 2. Dynamically increment observation counter
-    new_count = prev_count + 1
+    # CHECK: Has THIS SPECIFIC URN already been documented for this exact incident?
+    is_same_urn = False
+    if precedent:
+        is_same_urn = (experience.trigger_asset_urn == precedent.trigger_asset_urn)
 
-    lesson = {
-        "lesson": experience.root_cause,
-        "fix": experience.fix_proposed,
-        "observed_count": new_count,  # <--- Dynamic increment!
-        "success_rate": "100%",
-        "last_validated": experience.timestamp,
-        "source_experience_ids": list(set(prev_ids + [experience.id])),
-    }
+    # RULE: Suppress promotion ONLY if it's a direct duplicate on the EXACT SAME URN
+    if is_same_urn and getattr(precedent, "similarity_score", 0.0) >= 0.88:
+        state["should_promote"] = False
+        state["promote_reason"] = f"URN '{experience.trigger_asset_urn}' already has active documentation from {precedent.id}."
+        log.info(f"[PROMOTE] Skipped — {state['promote_reason']}")
+        return state
 
-    datahub.write_lesson(experience.trigger_asset_urn, lesson)
-    log.info(f"[PROMOTE] Promoted lesson to DataHub (Observed: {new_count}x) for asset: {experience.trigger_asset_urn}")
-    return {}
+    # ALWAYS Promote for New Asset URNs or Novel Incidents
+    state["should_promote"] = True
+    state["promote_reason"] = (
+        f"Promoting lesson to DataHub for URN: {experience.trigger_asset_urn} "
+        + ("(First incident recorded on this asset)" if not is_same_urn else "(Novel pattern)")
+    )
 
+    try:
+        datahub = DataHubClient()
+        datahub.add_incident_tag_or_documentation(
+            asset_urn=experience.trigger_asset_urn,
+            root_cause=experience.root_cause,
+            fix_proposed=experience.fix_proposed,
+        )
+        log.info(f"[PROMOTE] Successfully wrote lesson to DataHub URN: {experience.trigger_asset_urn}")
+    except Exception as e:
+        log.error(f"[PROMOTE] DataHub writeback failed: {e}")
+
+    return state
 
 def skip_promote(state: CortexState) -> CortexState:
     log.info(f"[SKIP_PROMOTE] Skipped DataHub metadata promotion: {state['promote_reason']}")

@@ -42,8 +42,8 @@ def approve_in_terminal(incident, fix) -> bool:
 
 def main():
     incident = Incident(
-        trigger_asset_urn=TARGET_URN,
-        description="one of my dashboards is broken",
+        trigger_asset_urn=TEST_URN,
+        description="Promotions model is failing or showing inconsistent discount values.",
     )
 
     result = run_incident(incident, hitl_approve_fn=approve_in_terminal)

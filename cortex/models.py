@@ -48,10 +48,7 @@ class AssetSnapshot:
     downstream_urns: List[str] = field(default_factory=list)
     schema_fields: List[str] = field(default_factory=list)
     last_modified: Optional[str] = None
-    # NEW: Compact upstream schema summaries and freshness calculations
-    upstream_schemas: Dict[str, List[str]] = field(
-        default_factory=dict
-    )  # {urn: ['col1:TYPE', ...]}
+    upstream_schemas: Dict[str, List[str]] = field(default_factory=dict) 
     freshness_age_hours: Optional[float] = None
     last_run_status: Optional[str] = None
 
@@ -64,8 +61,7 @@ class AssetSnapshot:
             "last_modified": self.last_modified,
             "upstream_schemas": self.upstream_schemas,
             "freshness_age_hours": self.freshness_age_hours,
-            "last_run_status": self.last_run_status,
-        }
+            "last_run_status": self.last_run_status}
 
 
 @dataclass
