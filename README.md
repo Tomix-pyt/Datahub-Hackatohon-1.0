@@ -264,7 +264,7 @@ tests/  │
 └── **README**.md               # This file Built With Python 3.10+ – Core application logic.
 
 
-
+# USed Stack
 LangGraph – Stateful investigation orchestration.
 
 DataHub – Semantic memory and knowledge write-back.
