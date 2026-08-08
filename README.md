@@ -147,27 +147,28 @@ $$\text{Action}(e_q, e_i) = \begin{cases} \text{Cold-Start Investigation}, & \te
                     │                       │ 
                     ▼                       ▼ 
                 **DATAHUB**           **CHROMADB** 
-                (Semantic Memory) (Episodic Memory) 
+            (Semantic Memory)       (Episodic Memory) 
                     │                       │ 
-                Schema,Lineage    Historical Freshness (Stale) Incidents 
+            Schema,Lineage      Historical Freshness (Stale) Incidents 
                     │                       │ 
                     └───────────┬───────────┘ 
                                 ▼ 
                           ┌─────────────┐ 
-                          │**GROQ**     │
-                          │(**LLM**)    │ 
+                          │     GROQ    │
+                          │     (LLM)   │ 
                           └──────┬──────┘ 
                                  ▼ 
                           **INVESTIGATION** 
                                   │ 
                       ┌───────────┴───────────┐ 
                       ▼                       ▼ 
-                      # PROPOSED FIX LEARNED LESSON 
-                      │ Human Approval        │
-                      │                       │ 
+                 PROPOSED FIX         LEARNED LESSON 
+                      │ 
+                Human Approval                │
                       ▼                       ▼ 
-                      **VERIFICATION (Fix Applied)** **DATAHUB**  (Knowledge Write-Back) 
-                                              │  
+                VERIFICATION                DATAHUB
+              (Fix Applied)          (Knowledge Write-Back) 
+                      |                       │  
                       └───────────┬───────────┘ 
                                   ▼ 
                           **NEW EXPERIENCE** 
@@ -180,6 +181,7 @@ $$\text{Action}(e_q, e_i) = \begin{cases} \text{Cold-Start Investigation}, & \te
 
 # Clone the repository 
 git clone [https://github.com/Tomix-pyt/Datahub-Hackatohon-1.0.git]
+
 cd Datahub-Hackatohon-1.0
 
 # Create and activate a virtual environment
@@ -188,7 +190,9 @@ python3 -m venv .venv source .venv/bin/activate  # On Windows: .venv\Scripts\act
 
 # Install dependencies
 
-pip install --upgrade pip pip install -r requirements.txt
+pip install --upgrade pip 
+
+pip install -r requirements.txt
 
 # Copy environment template
 
@@ -200,7 +204,10 @@ python app.py
 
 # Run tests
 
-pytest tests/ -v ⚙️ Configuration Create a .env file with the following variables:
+pytest tests/ -v 
+
+
+⚙️ Configuration Create a .env file with the following variables:
 
 |       Variable      |         Description                           |         Default            |
 |       ---           |                      ---                      |           ---              |
@@ -219,7 +226,11 @@ CORTEX_MOCK_MODE=true CORTEX_MOCK_VERSION=v1 python app.py
 
 # Run specific test modules
 
-pytest tests/test_graph.py -v pytest tests/test_diff.py -v pytest tests/test_reflection.py -v
+pytest tests/test_graph.py -v 
+
+pytest tests/test_diff.py -v 
+
+pytest tests/test_reflection.py -v
 
 # Run with coverage
 
@@ -274,10 +285,4 @@ LangChain/LangGraph for the agent orchestration framework.
 
 Groq for lightning-fast **LLM** inference.
 
-📬 Contact Team: Solo Build – all architecture, implementation, integration, testing, and infrastructure by a single developer.
-
-GitHub: Tomix-pyt
-
-Project Repository: Datahub-Hackatohon-1.0
-
-"Cortex should make every incident investigation make the next one easier."
+"Cortex should make every incident investigation make the next one easier.😂😂😂"
