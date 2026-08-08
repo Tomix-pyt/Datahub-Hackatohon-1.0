@@ -117,12 +117,8 @@ class DataHubClient:
                 log.warning("Mock: unknown urn '%s', returning empty snapshot", urn)
                 return AssetSnapshot(asset_urn=urn)
 
-            version = os.getenv("CORTEX_MOCK_VERSION", config.MOCK_CURRENT_VERSION)
-            if version not in {"v1", "v2"}:
-                raise ValueError(f"Unsupported CORTEX_MOCK_VERSION={version!r}; use v1 or v2")
-
             upstream_schemas = {
-                upstream: sorted(_MOCK_ASSETS[upstream][f"schema_{version}"])
+                upstream: sorted(_MOCK_ASSETS[upstream][f"schema_"])
                 for upstream in asset["upstream"]
                 if upstream in _MOCK_ASSETS
             }
@@ -130,7 +126,7 @@ class DataHubClient:
                 asset_urn=urn,
                 upstream_urns=sorted(asset["upstream"]),
                 downstream_urns=sorted(asset["downstream"]),
-                schema_fields=sorted(asset[f"schema_{version}"]),
+                schema_fields=sorted(asset[f"schema_"]),
                 upstream_schemas=upstream_schemas,
                 last_modified="mock-static",
                 freshness_age_hours=0.0,

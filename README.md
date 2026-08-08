@@ -40,7 +40,11 @@ When a data pipeline breaks, an engineer must:
 
 ## Identify the failing dataset.
 
-## Trace its lineage. ## Compare schemas. ## Check upstream dependencies. ## Search previous incidents. ## Determine the root cause. ## Figure out whether someone already solved this.
+## Trace its lineage. 
+## Compare schemas. 
+## Check upstream dependencies. 
+## Search previous incidents. 
+## Determine the root cause. ## Figure out whether someone already solved this.
 
 **Organizations accumulate this knowledge—but it's scattered across catalogs, documentation, logs, and the engineers who investigated them.**
 
@@ -134,17 +138,49 @@ $$\text{Action}(e_q, e_i) = \begin{cases} \text{Cold-Start Investigation}, & \te
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
-**INCIDENT** │ ▼ ┌───────────────────────┐ │ │ ▼ ▼ **DATAHUB** **CHROMADB** (Semantic Memory) (Episodic Memory) │ │ Schema, Lineage Historical Freshness (Stale) Incidents │ │ └───────────┬───────────┘ ▼ ┌─────────────┐ │ **GROQ** │ │ (**LLM**) │ └──────┬──────┘ ▼ **INVESTIGATION** │ ┌───────────┴───────────┐ ▼ ▼ # PROPOSED FIX LEARNED LESSON │ │ Human Approval │ │ │ ▼ ▼ **VERIFICATION** **DATAHUB** (Fix Applied) (Knowledge │ Write-Back) └───────────┬───────────┘ ▼ **NEW** **EXPERIENCE** │ ▼ **CHROMADB**
-
-text
-
+                          **INCIDENT** 
+                                │ 
+                                ▼ 
+                    ┌───────────────────────┐ 
+                    │                       │ 
+                    ▼                       ▼ 
+                **DATAHUB**           **CHROMADB** 
+                (Semantic Memory) (Episodic Memory) 
+                    │                       │ 
+                Schema,Lineage    Historical Freshness (Stale) Incidents 
+                    │                       │ 
+                    └───────────┬───────────┘ 
+                                ▼ 
+                          ┌─────────────┐ 
+                          │**GROQ**     │
+                          │(**LLM**)    │ 
+                          └──────┬──────┘ 
+                                 ▼ 
+                          **INVESTIGATION** 
+                                  │ 
+                      ┌───────────┴───────────┐ 
+                      ▼                       ▼ 
+                      # PROPOSED FIX LEARNED LESSON 
+                      │ Human Approval        │
+                      │                       │ 
+                      ▼                       ▼ 
+                      **VERIFICATION (Fix Applied)** **DATAHUB**  (Knowledge Write-Back) 
+                                              │  
+                      └───────────┬───────────┘ 
+                                  ▼ 
+                          **NEW EXPERIENCE** 
+                                  │ 
+                                  ▼ 
+                            **CHROMADB**
 ---
 
-## ⚡ Quick Start
+##  Quick Start
 
-```bash # Clone the repository git clone [https://github.com/Tomix-pyt/Datahub-Hackatohon-1.0.git](https://github.com/Tomix-pyt/Datahub-Hackatohon-1.0.git) cd Datahub-Hackatohon-1.0
+# Clone the repository 
+git clone [https://github.com/Tomix-pyt/Datahub-Hackatohon-1.0.git]
+cd Datahub-Hackatohon-1.0
 
 # Create and activate a virtual environment
 
@@ -166,30 +202,20 @@ python app.py
 
 pytest tests/ -v ⚙️ Configuration Create a .env file with the following variables:
 
-| Variable | Description | Default |
-| --- | --- | --- |
-| CORTEX_MOCK_MODE | Run offline without live **API** calls | true |
-| CORTEX_MOCK_VERSION | Mock warehouse version (v1 / v2) | v1 |
-| DATAHUB_GMS_URL | DataHub **GMS** endpoint | [http://localhost:**8080**](http://localhost:**8080**) |
-| DATAHUB_TOKEN | DataHub Personal Access Token | "" |
-| GROQ_API_KEY | Groq **API** key (for real **LLM** inference) | "" |
-| GROQ_MODEL | Groq model choice | llama-3.3-70b-versatile |
-| CHROMA_PERSIST_DIR | ChromaDB persistence directory | ./.chroma_db |
-🚀 Running Cortex
+|       Variable      |         Description                           |         Default            |
+|       ---           |                      ---                      |           ---              |
+| CORTEX_MOCK_MODE    | Run offline without live **API** calls        | true                       |
+| DATAHUB_GMS_URL     | DataHub **GMS** endpoint                      | [http://localhost:**8080**]|
+| DATAHUB_TOKEN       | DataHub Personal Access Token                 |""                          |
+| GROQ_API_KEY        | Groq **API** key (for real **LLM** inference) |""                          |
+| GROQ_MODEL          | Groq model choice                             | llama-3.3-70b-versatile    |
+| CHROMA_PERSIST_DIR  | ChromaDB persistence directory                | ./data/chroma              |
+
+ Running Cortex
 Mode A: Mock Mode (Zero External Dependencies)
 bash
 # Baseline mock pipeline (Version 1 - Initial State)
 CORTEX_MOCK_MODE=true CORTEX_MOCK_VERSION=v1 python app.py
-
-# Simulate upstream schema drift (Version 2)
-
-CORTEX_MOCK_MODE=true CORTEX_MOCK_VERSION=v2 python app.py Mode B: Live DataHub & Groq Start DataHub locally:
-
-bash datahub docker quickstart Set CORTEX_MOCK_MODE=false in .env and supply credentials.
-
-Run the agent:
-
-bash python app.py 🧪 Testing bash # Run all tests pytest tests/ -v
 
 # Run specific test modules
 
@@ -197,7 +223,36 @@ pytest tests/test_graph.py -v pytest tests/test_diff.py -v pytest tests/test_ref
 
 # Run with coverage
 
-pytest tests/ -v --cov=cortex --cov-report=html 📁 Project Structure text cortex/ ├── app.py                  # Entry point ├── graph.py                # LangGraph control flow ├── models.py               # Typed Pydantic contracts ├── memory_episodic.py      # ChromaDB vector store ├── memory_semantic.py      # DataHub **SDK** integration ├── diff.py                 # Snapshot & lineage diffing ├── reflection.py           # Recurrence guard & promotion gate ├── llm.py                  # **LLM** interface (Groq + mock) ├── procedure.py            # **YAML** runbook loader │ ├── procedures/ │   ├── schema_drift.yaml   # Schema change runbook │   ├── freshness.yaml      # Freshness violation runbook │   └── default.yaml        # Fallback triage runbook │ ├── tests/ │   ├── test_graph.py       # Warm/cold start tests │   ├── test_diff.py        # Snapshot equality tests │   └── test_reflection.py  # **HITL** approval/rejection tests │ ├── requirements.txt        # Dependencies ├── .env.example            # Environment template └── **README**.md               # This file 🛠️ Built With Python 3.10+ – Core application logic.
+pytest tests/ -v --cov=cortex --cov-report=html 
+# 📁 Project Structure text 
+├──cortex/  |               
+            ├── graph.py                # LangGraph control flow 
+            ├── models.py               # Typed Pydantic contracts 
+            ├── memory_episodic.py      # ChromaDB vector store 
+            ├── memory_semantic.py      # DataHub **SDK** integration 
+            ├── diff.py                 # Snapshot & lineage diffing 
+            ├── reflection.py           # Recurrence guard & promotion gate 
+            ├── llm.py                  # **LLM** interface (Groq + mock) 
+            ├── pedure.py            # **YAML** runbook loader │ 
+├── procedures/ │   
+                ├── schema_drift.yaml   # Schema change runbook │   
+                ├── freshness.yaml      # Freshness violation runbook │   
+                └── default.yaml        # Fallback triage runbook │ 
+tests/  │   
+        ├── test_graph.py       # Warm/cold start tests │   
+        ├── test_diff.py        # Snapshot equality tests │   
+        └── test_reflection.py  # **HITL** approval/rejection tests │ 
+├── requirements.txt
+├── examples  # to store examples and logs from use
+├── data/chroma # for chromaDB
+├── scripts/
+        └── simulate_incident.py, # to simulate schema drift and freshness error
+├── .env.example            # Environment template 
+├── app.py  # for mock mode
+├── app_live.py # for live test, it needs an oss of datahub and datahub sdk though
+└── **README**.md               # This file Built With Python 3.10+ – Core application logic.
+
+
 
 LangGraph – Stateful investigation orchestration.
 
