@@ -2,71 +2,75 @@
 
 > "An agent that remembers not just the solution, but the shortest path to finding it."
 
-Data teams re-investigate the same incidents over and over because the
-fix lives in a Slack thread, not in the system that actually knows the
-data. Cortex is a LangGraph agent that investigates data incidents by
-walking DataHub's lineage graph, remembers what it finds as an
-"Experience," and — critically — checks whether anything has actually
-changed before deciding whether to trust that memory or investigate
-fresh.
+Cortex is a LangGraph data-reliability agent. It receives an incident, checks episodic memory, verifies whether the current DataHub state still matches a previously successful investigation, traverses lineage when needed, proposes a fix for human approval, stores the experience, and promotes validated lessons back into DataHub.
 
-## Quick start (zero API keys needed)
+## The important memory behavior
+
+1. **Cold start:** no trusted precedent -> investigate the lineage graph.
+2. **Same asset, changed state:** use the previous investigation as a seed, then investigate again.
+3. **Same asset, unchanged state after a successful fix:** treat it as a contradiction and investigate again. The previous traversal/evidence is carried forward so Cortex can ask what it missed last time.
+4. **Different asset, high-confidence matching pattern:** reuse the learned fix pattern without pretending that the two assets have identical snapshots.
+5. **Rejected/failed fixes are never eligible for reuse.**
+
+## Quick start
 
 ```bash
-pip install -e .
+source .venv/bin/activate
 python app.py
-```
-
-This runs three incidents in **mock mode** (no live DataHub, no live
-LLM) and demonstrates the three real paths:
-
-1. **Cold start** — brand new incident, full investigation
-2. **Clean reuse** — same failure pattern on a *different* asset →
-   instant reuse
-3. **Contradiction** — the *same* asset breaks again with nothing
-   changed → Cortex refuses to blindly reuse the old fix and flags it
-   for human review instead
-
-Run the tests to confirm all three stay working as you build:
-
-```bash
-pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
-## Project structure
+Mock mode is the default and requires no API keys.
 
+### Mock schema-drift demo
+
+The mock warehouse has two versions:
+
+```bash
+CORTEX_MOCK_VERSION=v1 python app.py
 ```
+
+To simulate an upstream change for a later run:
+
+```bash
+CORTEX_MOCK_VERSION=v2 python app.py
+```
+
+## Real DataHub
+
+Set:
+
+```env
+CORTEX_MOCK_MODE=false
+DATAHUB_GMS_URL=http://localhost:8080
+DATAHUB_TOKEN=
+GROQ_API_KEY=...
+GROQ_MODEL=...
+```
+
+For the local DataHub quickstart, GMS is normally port 8080. The SDK integration explicitly reads the current Dataset entity and uses DataHub's lineage client for upstream/downstream relationships.
+
+## Important limitation
+
+`Dataset.last_modified` is treated as a freshness **proxy** in the current MVP. It is not claimed to be a real pipeline execution timestamp. A production implementation should use an actual ingestion/run-status aspect or assertion when available.
+
+## Structure
+
+```text
 cortex/
-  config.py            settings + mock mode switch
-  models.py             Incident, Experience, AssetSnapshot, DiffResult
-  procedure.py           loads procedures/*.yaml (procedural memory — just config, not a database)
-  memory_episodic.py     ChromaDB wrapper — the raw experience log, always written
-  memory_semantic.py     DataHub client — promoted/generalized lessons only, and mock fixtures
-  diff.py                 pure function: compares two AssetSnapshots
-  reflection.py           the promotion gate + recurrence-contradiction check
-  llm.py                  one function, swap the mock branch for a real call
-  graph.py                 the LangGraph state machine — read this file to understand the whole system
+  graph.py              LangGraph control flow
+  models.py             typed incident/snapshot/experience contracts
+  memory_episodic.py    Chroma incident memory
+  memory_semantic.py    DataHub state + promoted lessons
+  diff.py               pure snapshot/traversal comparison
+  reflection.py         recurrence guard + promotion gate
+  llm.py                mock/live diagnosis and fix generation
+  procedure.py          YAML runbooks
 
 procedures/
-  schema_drift.yaml       the runbook for this incident type
-  default.yaml             fallback for unclassified incidents
+  schema_drift.yaml
+  freshness.yaml
+  default.yaml
 
-tests/test_graph.py       locks in the three-path behavior — run this after any change
+tests/test_graph.py     core warm/cold/recurrent behavior
 ```
-
-## Switching off mock mode
-
-1. Sign up for the [DataHub Cloud free trial](https://datahub.com/free-trial/)
-2. Copy `.env.example` to `.env`, fill in `DATAHUB_GMS_URL`, `DATAHUB_TOKEN`, `ANTHROPIC_API_KEY`
-3. Set `CORTEX_MOCK_MODE=false`
-4. Implement the two `NotImplementedError` branches in `memory_semantic.py` and `llm.py` — they're clearly marked with `# TODO` comments for what's needed
-
-## Debugging
-
-Every node logs what it decided and why (`CORTEX_DEBUG=true` in `.env`,
-which is the default). If something's behaving unexpectedly, read the
-log line prefixed with the node name (`[RETRIEVE]`, `[VERIFY_DIFF]`,
-`[REFLECT]`, etc.) before touching code — the whole point of this
-structure is that the decision trail is visible, not hidden inside a
-prompt.

@@ -1,65 +1,33 @@
-"""
-The gatekeeper. This is the single most important node in the whole
-system to get right — everything else can be simple as long as this
-stays disciplined about what earns a place in DataHub.
-"""
+"""Promotion gate and recurrence guardrails."""
+from __future__ import annotations
+
 from cortex import config
-from cortex.diff import compute_diff
-from cortex.memory_semantic import DataHubClient
-from cortex.models import AssetSnapshot, Experience
+from cortex.models import Experience
 
 log = config.get_logger("cortex.reflection")
 
 
-# def reflect(experience: Experience) -> tuple[bool, str]:
-#     """
-#     Should this experience be promoted (generalized + written to DataHub)?
-#     Returns (should_promote, reason).
-#     """
-#     if not experience.fix_applied:
-#         return False, "fix was not applied — nothing proven yet"
-
-#     if experience.outcome != "success":
-#         return False, f"outcome was '{experience.outcome}', not a validated success"
-
-#     if not experience.novel:
-#         return False, "duplicate of an existing lesson — will increment observed_count instead"
-
-#     return True, "validated success on a novel pattern — promoting"
-
-
-
 def check_recurrence_despite_no_diff(
-    prior_experience: dict,
+    prior_experience: Experience | None,
     diff_found: bool,
     same_asset: bool,
 ) -> tuple[bool, str]:
-    """
-    Handles the case you and I dug into: same incident type fires again,
-    on the SAME asset, and the diff says nothing changed. If the prior
-    fix was already applied and marked successful, that's a contradiction —
-    a fix that truly worked under unchanged conditions cannot legitimately
-    fail again on that same asset.
+    if not same_asset or prior_experience is None:
+        return False, "no same-asset recurrence contradiction"
 
-    Deliberately scoped to same_asset=True only. A different asset that
-    happens to look structurally identical to a past precedent is NOT a
-    contradiction — it's a legitimate case of "I've seen this exact
-    pattern before, just on a different table" and reuse is appropriate.
-    """
-    if not same_asset:
-        return False, "different asset — structural match is a legitimate pattern reuse, not a recurrence"
-
-    prior_was_applied_success = (
-        prior_experience.get("fix_applied") and prior_experience.get("outcome") == "success"
-    )
-
-    if not diff_found and prior_was_applied_success:
+    if not diff_found and prior_experience.fix_applied and prior_experience.outcome == "success":
         return True, (
-            "Recurrence with no detected diff, but the prior fix was already "
-            "applied and marked successful. This likely means the original "
-            "diagnosis (or our diff coverage) was incomplete — routing to full "
-            "investigation and flagging for human review rather than reusing "
-            "the fix blindly."
+            "The same asset reproduced the incident even though the stored structural "
+            "fingerprint is unchanged after a previously successful fix. Reuse is unsafe; "
+            "Cortex must investigate again and treat the prior traversal as context."
         )
-
     return False, "no contradiction detected"
+
+
+def reflect(experience: Experience) -> tuple[bool, str]:
+    """Decide whether this experience has earned semantic promotion."""
+    if not experience.fix_applied:
+        return False, "fix was not approved/applied — nothing proven yet"
+    if experience.outcome != "success":
+        return False, f"outcome was '{experience.outcome}', not a validated success"
+    return True, "human-approved successful experience is eligible for semantic promotion"

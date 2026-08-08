@@ -1,13 +1,12 @@
-"""
-Wraps DataHub. In MOCK_MODE (default), returns canned fixture data so
-you can develop and debug graph.py without a live DataHub instance.
-Flip CORTEX_MOCK_MODE=false and fill in DATAHUB_GMS_URL / DATAHUB_TOKEN
-in .env once you're testing against the real Cloud trial.
+"""DataHub integration and the small mock warehouse used by the test/demo.
 
-Real implementation is intentionally left as clearly-marked TODOs —
-don't guess at DataHub's exact GraphQL schema from memory; check the
-live docs/schema once you're actually wired up.
+The real path uses the DataHub SDK's explicit lineage client rather than
+assuming that a Dataset entity exposes a ``downstreams`` attribute.  This is
+important because lineage is a separate SDK capability in DataHub 1.6.x.
 """
+from __future__ import annotations
+
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -16,10 +15,6 @@ from cortex.models import AssetSnapshot
 
 log = config.get_logger("cortex.memory_semantic")
 
-# --- Mock fixtures -----------------------------------------------------
-# A tiny fake warehouse: revenue dashboard <- daily_metrics <- dbt model <- raw_sales.
-# Two versions of raw_sales exist so you can simulate a schema-drift incident
-# by switching which one "current" points to (see MOCK_CURRENT_VERSION below).
 
 _MOCK_ASSETS = {
     "urn:dataset:raw_sales": {
@@ -27,9 +22,9 @@ _MOCK_ASSETS = {
         "upstream": [],
         "downstream": ["urn:dataset:daily_metrics"],
         "schema_v1": ["customer_id:int", "amount:float", "created_at:timestamp"],
-        "schema_v2": ["customer_uuid:string", "amount:float", "created_at:timestamp"],  # renamed column
+        "schema_v2": ["customer_uuid:string", "amount:float", "created_at:timestamp"],
         "model_logic_hash_v1": "hash_a1",
-        "model_logic_hash_v2": "hash_a1",  # logic unchanged in this scenario
+        "model_logic_hash_v2": "hash_a1",
         "last_run_status": "success",
     },
     "urn:dataset:daily_metrics": {
@@ -52,11 +47,6 @@ _MOCK_ASSETS = {
         "model_logic_hash_v2": None,
         "last_run_status": "success",
     },
-    # A second, structurally analogous dashboard. Used to demonstrate the
-    # legitimate clean-reuse path: a *similar* incident on a *different*
-    # asset, where nothing about THIS asset's state has changed, so
-    # reuse is safe — as opposed to the same asset recurring, which our
-    # design correctly treats as a contradiction (see reflection.py).
     "urn:dashboard:regional_revenue_dashboard": {
         "urn": "urn:dashboard:regional_revenue_dashboard",
         "upstream": ["urn:dataset:daily_metrics"],
@@ -69,118 +59,162 @@ _MOCK_ASSETS = {
     },
 }
 
-
-# Where promoted lessons get written in mock mode, so you can inspect them.
 _MOCK_PROMOTED_LESSONS: dict[str, list[dict]] = {}
+
+
+def _schema_fields(dataset) -> list[str]:
+    """Extract schema fields defensively across SDK object shapes."""
+    fields = getattr(dataset, "schema", None) or []
+    result: list[str] = []
+    for field in fields:
+        path = getattr(field, "field_path", None) or getattr(field, "fieldPath", None)
+        native = getattr(field, "native_type", None) or getattr(field, "nativeDataType", None)
+        if path is not None:
+            result.append(f"{path}:{native or 'UNKNOWN'}")
+        else:
+            result.append(str(field))
+    return sorted(result)
+
+
+def _lineage_urns(client, urn: str, direction: str) -> list[str]:
+    """Use the SDK's lineage client; return an empty list on unavailable lineage."""
+    try:
+        results = client.lineage.get_lineage(
+            source_urn=urn,
+            direction=direction,
+            max_hops=1,
+            count=500,
+        )
+        return sorted({item.urn for item in results if getattr(item, "urn", None)})
+    except Exception as exc:
+        log.warning("Unable to read %s lineage for %s: %s", direction, urn, exc)
+        return []
 
 
 class DataHubClient:
     def __init__(self):
         self.mock = config.MOCK_MODE
         if self.mock:
-            log.info("DataHubClient running in MOCK_MODE — no live DataHub calls will be made")
+            log.info("DataHubClient running in MOCK_MODE — no live DataHub calls")
+            self.client = None
         else:
             from datahub.sdk import DataHubClient as RealDataHubClient
-            self.client = RealDataHubClient.from_env()
-            log.info("DataHubClient connected to live DataHub instance")
+
+            # Explicit construction is easier to debug than relying on a
+            # hidden ~/.datahubenv file and supports the names in config.py.
+            self.client = RealDataHubClient(
+                server=config.DATAHUB_GMS_URL,
+                token=config.DATAHUB_TOKEN or None,
+            )
+            self.client.test_connection()
+            log.info("DataHubClient connected to %s", config.DATAHUB_GMS_URL)
 
     def get_asset_snapshot(self, urn: str) -> AssetSnapshot:
-        """Fetch current structural state of an asset for diffing/storage."""
+        """Fetch the current structural state of an asset."""
         if self.mock:
             asset = _MOCK_ASSETS.get(urn)
             if asset is None:
-                log.warning(f"Mock: unknown urn '{urn}', returning empty snapshot")
+                log.warning("Mock: unknown urn '%s', returning empty snapshot", urn)
                 return AssetSnapshot(asset_urn=urn)
 
-            version = MOCK_CURRENT_VERSION
-            snapshot = AssetSnapshot(
+            version = os.getenv("CORTEX_MOCK_VERSION", config.MOCK_CURRENT_VERSION)
+            if version not in {"v1", "v2"}:
+                raise ValueError(f"Unsupported CORTEX_MOCK_VERSION={version!r}; use v1 or v2")
+
+            upstream_schemas = {
+                upstream: sorted(_MOCK_ASSETS[upstream][f"schema_{version}"])
+                for upstream in asset["upstream"]
+                if upstream in _MOCK_ASSETS
+            }
+            return AssetSnapshot(
                 asset_urn=urn,
-                upstream_urns=asset["upstream"],
-                downstream_urns=asset["downstream"],
+                upstream_urns=sorted(asset["upstream"]),
+                downstream_urns=sorted(asset["downstream"]),
                 schema_fields=sorted(asset[f"schema_{version}"]),
+                upstream_schemas=upstream_schemas,
+                last_modified="mock-static",
+                freshness_age_hours=0.0,
                 last_run_status=asset["last_run_status"],
             )
-            log.debug(f"Mock snapshot for {urn} (version={version}): {snapshot}")
-            return snapshot
 
-        # Real path — uses confirmed SDK methods (dataset.upstreams, dataset.last_modified, dataset.schema)
         dataset = self.client.entities.get(urn)
+        if dataset is None:
+            raise ValueError(f"DataHub returned no dataset for URN: {urn}")
 
-        # Extract upstreams
-        upstream_urns = []
-        if dataset.upstreams and dataset.upstreams.upstreams:
-            upstream_urns = [u.dataset for u in dataset.upstreams.upstreams]
+        upstream_urns = _lineage_urns(self.client, urn, "upstream")
+        downstream_urns = _lineage_urns(self.client, urn, "downstream")
+        schema_fields = _schema_fields(dataset)
 
-        # Extract downstreams
-        downstream_urns = []
-        # Extract schema fields
-        schema_fields = []
-        try:
-            for field in dataset.schema or []:
-                schema_fields.append(f"{field.field_path}:{field.native_type}")
-        except AttributeError:
-            log.warning(
-                "SchemaField attribute names not confirmed against this SDK "
-                "version — falling back to str() representation."
-            )
-            schema_fields = [str(f) for f in (dataset.schema or [])]
-
-        # Calculate freshness age relative to current UTC time
-        last_modified_dt = dataset.last_modified
+        # DataHub's Dataset.last_modified is a metadata modification timestamp,
+        # not a guaranteed pipeline execution timestamp. We use it as a
+        # freshness proxy for this MVP and keep last_run_status separate rather
+        # than pretending the timestamp itself is a run status.
+        last_modified_dt = getattr(dataset, "last_modified", None)
         freshness_age = None
         last_modified_str = None
-
         if last_modified_dt:
             if isinstance(last_modified_dt, datetime):
                 if last_modified_dt.tzinfo is None:
-                    last_modified_dt = last_modified_dt.replace(
-                        tzinfo=timezone.utc
-                    )
-                now_utc = datetime.now(timezone.utc)
-                delta = now_utc - last_modified_dt
-                freshness_age = round(delta.total_seconds() / 3600.0, 2)
+                    last_modified_dt = last_modified_dt.replace(tzinfo=timezone.utc)
                 last_modified_str = last_modified_dt.isoformat()
+                freshness_age = round(
+                    (datetime.now(timezone.utc) - last_modified_dt).total_seconds() / 3600.0,
+                    2,
+                )
             else:
                 last_modified_str = str(last_modified_dt)
 
+        upstream_schemas: dict[str, list[str]] = {}
+        for upstream in upstream_urns:
+            try:
+                upstream_entity = self.client.entities.get(upstream)
+                if upstream_entity is not None:
+                    upstream_schemas[upstream] = _schema_fields(upstream_entity)
+            except Exception as exc:
+                log.warning("Unable to snapshot upstream schema %s: %s", upstream, exc)
+
         snapshot = AssetSnapshot(
             asset_urn=urn,
-            upstream_urns=sorted(upstream_urns),
-            downstream_urns=sorted(downstream_urns),
-            schema_fields=sorted(schema_fields),
+            upstream_urns=upstream_urns,
+            downstream_urns=downstream_urns,
+            schema_fields=schema_fields,
             last_modified=last_modified_str,
+            upstream_schemas=upstream_schemas,
             freshness_age_hours=freshness_age,
-            last_run_status=str(dataset.last_modified),
+            last_run_status=None,
         )
-
         log.info(
-            f"Live snapshot for {urn}: {len(upstream_urns)} upstream, "
-            f"last_modified={dataset.last_modified}, age={freshness_age}h"        )
+            "Live snapshot for %s: %d upstream, %d downstream, %d fields, age=%sh",
+            urn,
+            len(upstream_urns),
+            len(downstream_urns),
+            len(schema_fields),
+            freshness_age,
+        )
         return snapshot
 
     def write_lesson(self, asset_urn: str, lesson: dict) -> None:
-        """
-        Write (or update) a generalized, promoted lesson attached to an
-        asset. Uses DataHub's native Document entity (AI-agent-facing
-        context, hidden from normal search via show_in_global_context=False)
-        rather than a bespoke custom aspect — this is a stronger DataHub
-        integration story since it's DataHub's own built-in primitive for
-        exactly this purpose.
-        """
+        """Write a generalized Cortex lesson as a DataHub Document."""
         if self.mock:
             _MOCK_PROMOTED_LESSONS.setdefault(asset_urn, []).append(lesson)
-            log.info(f"[MOCK WRITE] Promoted lesson to DataHub asset {asset_urn}: {lesson}")
+            log.info("[MOCK WRITE] Promoted lesson to %s: %s", asset_urn, lesson)
             return
 
         from datahub.sdk import Document
 
+        lesson_id = lesson["lesson_id"]
         doc = Document.create_document(
-            id=f"cortex-lesson-{lesson.get('source_experience_ids', ['unknown'])[0]}",
-            title=f"Cortex lesson: {lesson.get('lesson', '')[:60]}",
-            text=f"{lesson.get('lesson', '')}\n\nFix: {lesson.get('fix', '')}\n"
-                 f"Observed: {lesson.get('observed_count')}x, success rate {lesson.get('success_rate')}",
+            id=lesson_id,
+            title=f"Cortex lesson: {lesson.get('title', 'validated incident pattern')}",
+            text=(
+                f"{lesson.get('lesson', '')}\n\n"
+                f"Fix: {lesson.get('fix', '')}\n"
+                f"Observed: {lesson.get('observed_count', 1)}x\n"
+                f"Success rate: {lesson.get('success_rate', 'unknown')}\n"
+                f"Last validated: {lesson.get('last_validated', 'unknown')}"
+            ),
             related_assets=[asset_urn],
             show_in_global_context=False,
         )
         self.client.entities.upsert(doc)
-        log.info(f"Wrote promoted lesson as Document, attached to {asset_urn}")
+        log.info("Wrote promoted lesson %s to DataHub asset %s", lesson_id, asset_urn)

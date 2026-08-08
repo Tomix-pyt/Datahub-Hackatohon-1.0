@@ -19,7 +19,7 @@ from time import time
 from cortex.graph import run_incident
 from cortex.models import Incident
 
-URN ="urn:li:dataset:(urn:li:dataPlatform:powerbi,b2fd91.datahub_order_entries.ORDER_DETAILS,PROD)"
+URN = "urn:dashboard:revenue_dashboard"
 
 def always_approve(incident, fix) -> bool:
     print(f"\n  [HITL] Auto-approving fix for {incident.trigger_asset_urn}")
@@ -57,7 +57,7 @@ def main():
     start = time()
     incident_2 = Incident(
         incident_type="schema_drift",
-        trigger_asset_urn=URN,
+        trigger_asset_urn="urn:dashboard:regional_revenue_dashboard",
         description="Regional Revenue Dashboard showing $0, customer join appears broken",
     )
     result_2 = run_incident(incident_2, hitl_approve_fn=always_approve)

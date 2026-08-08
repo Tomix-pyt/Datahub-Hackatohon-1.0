@@ -1,53 +1,33 @@
+"""LLM boundary.
+
+Mock mode is deterministic and dependency-light; live mode is isolated to
+this module so the graph can be tested without a provider key.
 """
-One function, on purpose. If you ever need to swap models or providers,
-this is the only place that changes.
-"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
 from typing import Optional
 
 from cortex import config
 
 log = config.get_logger("cortex.llm")
 
-from datetime import datetime, timezone
-from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage, SystemMessage
-
-llm = ChatGroq(model=config.GROQ_MODEL, api_key=config.GROQ_API_KEY, temperature=0)
-
-
-# In cortex/llm.py
-
-from datetime import datetime, timezone
-from typing import Optional
-
 
 def _summarize_lineage_graph(lineage_graph: Optional[dict], target_urn: str) -> str:
-    """Compresses 20+ graph node snapshots into a token-efficient summary (<600 tokens)."""
     if not lineage_graph:
-        log.warning("No lineage graph provided for summarization.")
         return "No connected lineage graph context."
-
-    summary_lines = []
+    lines = []
     for urn, snap in lineage_graph.items():
         if urn == target_urn:
-            continue  # Target URN is already rendered in full detail
-
-        last_mod = snap.get("last_modified") or "N/A"
+            continue
         fields = snap.get("schema_fields") or []
-        field_count = len(fields)
-
-        sample_fields = fields[:3]
-        sample_str = f"{sample_fields}..." if field_count > 3 else str(sample_fields)
-
-        # Short URN alias for readability
+        sample = fields[:3]
         short_urn = urn.split(",")[-1] if "," in urn else urn
-        summary_lines.append(
-            f"- Asset: {short_urn}\n"
-            f"  Last Modified: {last_mod} | Total Fields: {field_count} | Sample: {sample_str}"
+        lines.append(
+            f"- Asset: {short_urn} | Last Modified: {snap.get('last_modified') or 'N/A'} "
+            f"| Fields: {len(fields)} | Sample: {sample}"
         )
-
-    # Cap summary at top 8 relevant nodes to guarantee token safety
-    return "\n".join(summary_lines[:8])
+    return "\n".join(lines[:8]) or "No connected lineage graph context."
 
 
 def diagnose_root_cause(
@@ -56,167 +36,70 @@ def diagnose_root_cause(
     diff_details: Optional[dict] = None,
     lineage_graph: Optional[dict] = None,
 ) -> str:
-    """Diagnoses root cause using token-optimized context."""
-    target_urn = current_snapshot.get("asset_urn", "")
-    compact_graph = _summarize_lineage_graph(lineage_graph, target_urn)
-    current_time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    # Sample schema fields for target asset to prevent single-asset token bloat
-    target_fields = current_snapshot.get("schema_fields", [])
-    target_fields_sample = (
-        target_fields[:15] if len(target_fields) > 15 else target_fields
-    )
-
-    prompt = f"""
-        You are Cortex, an automated Data Reliability Engineer.
-        Diagnose the root cause of the incident using the grounded evidence below.
-
-        CURRENT PLATFORM TIME: {current_time_str}
-
-        INCIDENT DESCRIPTION:
-        {description}
-
-        TARGET ASSET SNAPSHOT:
-        URN: {target_urn}
-        Last Modified: {current_snapshot.get('last_modified')}
-        Age (Hours): {current_snapshot.get('freshness_age_hours')}
-        Schema Fields Sample ({len(target_fields)} total):
-        {target_fields_sample}
-
-        COMPUTED LINEAGE DIFFS & ANOMALIES:
-        {diff_details if diff_details else "No direct structural diff flags."}
-
-        CONNECTED LINEAGE GRAPH SUMMARY:
-        {compact_graph}
-
-        INSTRUCTIONS:
-        1. Compare target asset's 'Age (Hours)' against platform SLA (>24 hours is stale).
-        2. Review COMPUTED LINEAGE DIFFS for missing or mismatched columns between target and upstream.
-        3. State the root cause clearly in 2-3 concise sentences based strictly on the evidence above.
-"""
-
-    response = llm.invoke([
-        SystemMessage(content="You are Cortex, an expert Data Reliability Engineer."),
-        HumanMessage(content=prompt)
-    ])
-    return response.content
-
-
-# def diagnose_root_cause(
-#     description: str,
-#     current_snapshot: dict,
-#     diff_details: Optional[dict] = None,
-#     lineage_graph: Optional[dict] = None,
-# ) -> str:
-#     target_urn = current_snapshot.get("asset_urn", "")
-#     compact_graph_summary = _summarize_lineage_graph(lineage_graph, target_urn)
-    
-#     # Get current UTC time as an explicit baseline for freshness math
-#     current_time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-#     prompt = f"""
-#         You are Cortex, an automated Data Reliability Engineer.
-#         Diagnose the root cause of the incident using the grounded evidence below.
-
-#         CURRENT PLATFORM TIME: {current_time_str}
-
-#         TARGET ASSET SNAPSHOT:
-#         URN: {target_urn}
-#         Last Modified: {current_snapshot.get('last_modified')}
-#         Current Schema Fields ({len(current_snapshot.get('schema_fields', []))} total):
-#         {current_snapshot.get('schema_fields')}
-
-#         COMPUTED DIFF & ANOMALIES:
-#         {diff_details if diff_details else "No direct structural diff flags."}
-
-#         CONNECTED LINEAGE GRAPH SUMMARY:
-#         {compact_graph_summary}
-
-#         INSTRUCTIONS:
-#         1. Compare 'Last Modified' against 'CURRENT PLATFORM TIME'. If 'Last Modified' is > 24 hours behind CURRENT PLATFORM TIME, flag an SLA Freshness Breach!
-#         2. Check for schema column mismatches vs upstream models.
-#         3. State the root cause clearly and concisely in 2-3 sentences based strictly on this evidence.
-#         """
-
-#     response = llm.invoke([
-#         SystemMessage(content=prompt),
-#         HumanMessage(content='What is the root cause of the incident based on the evidence provided?')])
-#     root_cause = response.content
-#     log.info(f"[GROQ] Diagnosed root cause:\n{root_cause}")
-#     return root_cause
-
-
-# def diagnose_root_cause(description: str, current_snapshot: dict, diff_details: dict | None, lineage_graph: dict | None) -> str:
-#     """
-#     Actually reasons over real evidence to determine root cause — this is
-#     what was missing before: investigate() used to hardcode a schema-drift
-#     string regardless of the real incident. Now the LLM sees the real
-#     incident description, the real current asset state, and any known
-#     diff, and has to produce a cause consistent with THAT evidence.
-#     """
-#     if config.MOCK_MODE:
-#         if diff_details and "schema" in diff_details:
-#             return f"Schema drift: {diff_details['schema']}"
-#         return "Schema drift: customer_id renamed to customer_uuid in raw_sales"
-
-#     from langchain_groq import ChatGroq
-#     from langchain_core.messages import HumanMessage, SystemMessage
-
-#     llm = ChatGroq(model=config.GROQ_MODEL, api_key=config.GROQ_API_KEY, temperature=0)
-
-#     system = (
-#         "You are a data engineering incident-response agent. Given an "
-#         "incident description and real evidence gathered from a metadata "
-#         "graph (DataHub) — including the asset's upstream/downstream "
-#         "lineage, schema fields, and last known run status — determine "
-#         "the most likely root cause. Base your answer ONLY on the evidence "
-#         "given. Be specific and concise, one to two sentences."
-#     )
-#     user = (
-#         f"Incident: {description}\n\n"
-#         f"Current asset state: {current_snapshot}\n\n"
-#         f"Lineage graph summary: {lineage_graph}\n\n"
-#         f"Known changes since last investigation: {diff_details or 'none detected — no prior investigation, or nothing changed'}\n\n"
-#         f"What is the root cause?"
-#     )
-
-#     response = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
-#     root_cause = response.content
-#     log.info(f"[GROQ] Diagnosed root cause:\n{root_cause}")
-#     return root_cause
-
-
-def generate_fix(root_cause: str, evidence: dict) -> str:
-    """Ask the LLM to draft a fix given the investigation evidence."""
     if config.MOCK_MODE:
-        fix = (
-            f"-- MOCK FIX (no live LLM call)\n"
-            f"-- Root cause: {root_cause}\n"
-            f"-- Evidence: {evidence}\n"
-            f"ALTER VIEW daily_metrics AS\n"
-            f"SELECT customer_uuid AS customer_id, amount, created_at\n"
-            f"FROM raw_sales;  -- updated for renamed column"
-        )
-        log.debug(f"[MOCK] Generated fix:\n{fix}")
-        return fix
+        mismatches = (diff_details or {}).get("lineage_mismatches", [])
+        freshness = (diff_details or {}).get("freshness_status", {})
+        seed = (diff_details or {}).get("seed_diff") or {}
+        if mismatches or "schema" in seed:
+            return "Schema drift detected: the current asset schema is inconsistent with its upstream lineage."
+        if freshness.get("is_stale"):
+            return "Freshness breach detected: the affected asset has exceeded the configured freshness SLA."
+        if seed:
+            return f"The previous fix no longer explains the incident; current structural evidence changed: {seed}"
+        return "The incident pattern requires fresh lineage investigation because no prior structural evidence explains it."
 
     from langchain_groq import ChatGroq
     from langchain_core.messages import HumanMessage, SystemMessage
 
+    target_urn = current_snapshot.get("asset_urn", "")
+    target_fields = current_snapshot.get("schema_fields", [])
+    compact_graph = _summarize_lineage_graph(lineage_graph, target_urn)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    prompt = f"""
+You are Cortex, an automated Data Reliability Engineer.
+Diagnose the most likely root cause using ONLY the supplied evidence.
+Do not invent logs, schema changes, pipeline runs, or relationships.
+
+TIME: {now}
+INCIDENT: {description}
+TARGET: {target_urn}
+LAST MODIFIED: {current_snapshot.get('last_modified')}
+AGE HOURS: {current_snapshot.get('freshness_age_hours')}
+TARGET SCHEMA ({len(target_fields)} fields): {target_fields[:20]}
+COMPUTED EVIDENCE: {diff_details or 'none'}
+LINEAGE SUMMARY:
+{compact_graph}
+
+Return 2-3 concise sentences naming the most likely root cause and the evidence that supports it.
+"""
     llm = ChatGroq(model=config.GROQ_MODEL, api_key=config.GROQ_API_KEY, temperature=0)
+    response = llm.invoke([
+        SystemMessage(content="You are Cortex, an expert Data Reliability Engineer."),
+        HumanMessage(content=prompt),
+    ])
+    return response.content
+
+
+def generate_fix(root_cause: str, evidence: dict) -> str:
+    if config.MOCK_MODE:
+        return (
+            "-- MOCK FIX (human approval required)\n"
+            f"-- Root cause: {root_cause}\n"
+            f"-- Evidence: {evidence}\n"
+            "-- Corrective action: restore the affected schema/lineage contract "
+            "or update the dependent transformation to the new column name."
+        )
+
+    from langchain_groq import ChatGroq
+    from langchain_core.messages import HumanMessage, SystemMessage
 
     system = (
-        "You are a data engineering incident-response agent. Given a root "
-        "cause and evidence gathered from a metadata graph (DataHub), "
-        "propose a concrete, minimal fix as SQL or a short explanation of "
-        "the corrective action. Be specific and concise — this gets shown "
-        "to a human reviewer for approval, not executed automatically." 
-        "Coincise and avoid too much grandiose explanation. Focus on the actionable fix."
-
+        "You are a data engineering incident-response agent. Given a root cause "
+        "and grounded DataHub evidence, propose the smallest concrete corrective "
+        "action. This is shown to a human reviewer and must never be described as "
+        "already executed."
     )
-    user = f"Root cause: {root_cause}\n\nEvidence: {evidence}\n\nPropose a fix."
-
+    user = f"Root cause: {root_cause}\n\nEvidence: {evidence}\n\nPropose the minimal safe fix."
+    llm = ChatGroq(model=config.GROQ_MODEL, api_key=config.GROQ_API_KEY, temperature=0)
     response = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
-    fix = response.content
-    log.info(f"[GROQ] Generated fix:\n{fix}")
-    return fix
+    return response.content

@@ -1,11 +1,5 @@
-"""
-Run with: pytest tests/test_graph.py -v
-
-Locks in the three behaviors we verified by hand — if a future change
-breaks any of these, you'll know immediately instead of discovering it
-mid-demo.
-"""
-import shutil
+"""Regression tests for Cortex's three core memory decisions."""
+from pathlib import Path
 
 import pytest
 
@@ -16,11 +10,10 @@ from cortex.models import Incident
 
 
 @pytest.fixture(autouse=True)
-def clean_episodic_memory():
-    """Every test starts with a fresh, in-memory Chroma store — avoids
-    on-disk SQLite lock contention entirely and keeps tests fast and
-    independent of each other."""
-    config.CHROMA_PERSIST_DIR = ":memory:"
+def isolated_memory(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CHROMA_PERSIST_DIR", str(tmp_path / "chroma"))
+    monkeypatch.setattr(config, "MOCK_MODE", True)
+    monkeypatch.setenv("CORTEX_MOCK_VERSION", "v1")
     reset_client()
     yield
     reset_client()
@@ -34,71 +27,61 @@ def reject(incident, fix):
     return False
 
 
-def test_cold_start_investigates_fully():
-    incident = Incident(
+def incident(asset="urn:dashboard:revenue_dashboard", description="Revenue Dashboard showing $0"):
+    return Incident(
         incident_type="schema_drift",
-        trigger_asset_urn="urn:dashboard:revenue_dashboard",
-        description="Revenue Dashboard showing $0",
+        trigger_asset_urn=asset,
+        description=description,
     )
-    result = run_incident(incident, hitl_approve_fn=approve)
+
+
+def test_cold_start_investigates_and_promotes():
+    result = run_incident(incident(), hitl_approve_fn=approve)
     assert result["reused_fix"] is False
     assert result["experience"].novel is True
+    assert result["experience"].fix_applied is True
+    assert result["outcome"] == "success"
     assert result["should_promote"] is True
 
 
-def test_clean_reuse_on_different_asset():
-    incident_1 = Incident(
-        incident_type="schema_drift",
-        trigger_asset_urn="urn:dashboard:revenue_dashboard",
-        description="Revenue Dashboard showing $0",
+def test_cross_asset_successful_pattern_is_reused_without_snapshot_diff():
+    run_incident(incident(), hitl_approve_fn=approve)
+    result = run_incident(
+        incident("urn:dashboard:regional_revenue_dashboard", "Regional Revenue Dashboard showing $0"),
+        hitl_approve_fn=approve,
     )
-    run_incident(incident_1, hitl_approve_fn=approve)
-
-    incident_2 = Incident(
-        incident_type="schema_drift",
-        trigger_asset_urn="urn:dashboard:regional_revenue_dashboard",
-        description="Regional Revenue Dashboard showing $0",
-    )
-    result_2 = run_incident(incident_2, hitl_approve_fn=approve)
-
-    assert result_2["reused_fix"] is True
-    assert result_2["nodes_visited"] == 1
-    assert result_2["experience"].matched_prior_experience_id is not None
+    assert result["reused_fix"] is True
+    assert result["nodes_visited"] == 1
+    assert result["experience"].matched_prior_experience_id is not None
 
 
-def test_same_asset_recurrence_is_flagged_not_reused():
-    incident_1 = Incident(
-        incident_type="schema_drift",
-        trigger_asset_urn="urn:dashboard:revenue_dashboard",
-        description="Revenue Dashboard showing $0",
-    )
-    run_incident(incident_1, hitl_approve_fn=approve)
+def test_same_asset_no_change_is_a_contradiction_and_reinvestigates():
+    run_incident(incident(), hitl_approve_fn=approve)
+    result = run_incident(incident(), hitl_approve_fn=approve)
+    assert result["reused_fix"] is False
+    assert result["recurrence_flag"] is True
+    assert result["experience"].matched_prior_experience_id is not None
+    assert result["experience"].evidence_context["recurrence_flag"] is True
+    assert result["experience"].evidence_context["diff_details"]["prior_experience_context"] is not None
 
-    incident_2 = Incident(
-        incident_type="schema_drift",
-        trigger_asset_urn="urn:dashboard:revenue_dashboard",
-        description="Revenue Dashboard showing $0",
-    )
-    result_2 = run_incident(incident_2, hitl_approve_fn=approve)
 
-    assert result_2["reused_fix"] is False, "same-asset recurrence with no diff must NOT be blindly reused"
-    assert result_2["recurrence_flag"] is True
+def test_same_asset_upstream_change_is_not_misclassified_as_no_diff(monkeypatch):
+    run_incident(incident(), hitl_approve_fn=approve)
+    monkeypatch.setenv("CORTEX_MOCK_VERSION", "v2")
+    result = run_incident(incident(), hitl_approve_fn=approve)
+    assert result["reused_fix"] is False
+    assert result["recurrence_flag"] is False
+    assert result["diff_found"] is True
+    assert result["experience"].matched_prior_experience_id is not None
 
 
 def test_rejected_fix_is_not_reused_later():
-    incident_1 = Incident(
-        incident_type="schema_drift",
-        trigger_asset_urn="urn:dashboard:revenue_dashboard",
-        description="Revenue Dashboard showing $0",
-    )
-    result_1 = run_incident(incident_1, hitl_approve_fn=reject)
-    assert result_1["outcome"] == "failed"
-    assert result_1["should_promote"] is False
+    first = run_incident(incident(), hitl_approve_fn=reject)
+    assert first["outcome"] == "rejected"
+    assert first["should_promote"] is False
 
-    incident_2 = Incident(
-        incident_type="schema_drift",
-        trigger_asset_urn="urn:dashboard:regional_revenue_dashboard",
-        description="Regional Revenue Dashboard showing $0",
+    second = run_incident(
+        incident("urn:dashboard:regional_revenue_dashboard", "Revenue Dashboard showing $0"),
+        hitl_approve_fn=approve,
     )
-    result_2 = run_incident(incident_2, hitl_approve_fn=approve)
-    assert result_2["reused_fix"] is False, "a rejected precedent must never be reused"
+    assert second["reused_fix"] is False
