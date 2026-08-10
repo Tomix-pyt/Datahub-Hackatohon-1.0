@@ -1,0 +1,24 @@
+name: Schema Drift Investigation
+trigger:
+  incident_type: schema_drift
+procedure:
+  - step: retrieve_asset
+    description: Retrieve affected asset
+  - step: retrieve_lineage
+    description: Retrieve upstream lineage
+  - step: compare_schema
+    description: Compare current schema against previous schema
+  - step: check_dbt_model
+    description: Check dbt model
+  - step: find_downstream
+    description: Identify downstream dashboards
+  - step: search_episodic
+    description: Search episodic memory
+  - step: generate_fix
+    description: Generate candidate fix
+success_metric:
+  type: human_confirmed
+  check: hitl_approval
+  # NOTE: "dashboard_restored" via automated query re-run is the more
+  # rigorous check but isn't built for the hackathon MVP — human
+  # confirmation in the demo UI is the honest, actually-implemented version.

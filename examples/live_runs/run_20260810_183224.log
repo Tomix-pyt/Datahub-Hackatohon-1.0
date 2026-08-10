@@ -1,0 +1,69 @@
+
+============================================================
+HUMAN REVIEW — Incident: my dashboard just broke and i need a fix
+Asset: urn:li:dataset:(urn:li:dataPlatform:snowflake,b2fd91.order_entry_db.analytics.order_details,PROD)
+Proposed fix:
+**Concrete Fix:**
+
+To resolve the schema drift incident, I propose the following concrete fix:
+
+**Step 1: Update column data types in the target asset**
+
+Update the data types of the following columns in the `target_table` to match the upstream model (PROD):
+
+* `billing_address_line1`: Update from `VARCHAR(16777216)` to `TEXT`
+* `billing_address_line2`: Update from `VARCHAR(16777216)` to `TEXT`
+* `billing_country`: Update from `VARCHAR(16777216)` to `TEXT`
+* ... (update all columns with type mismatches)
+
+**Step 2: Address missing columns**
+
+* Add the `customer_id` column to the `target_table` to match the upstream model (PROD)
+* Drop the `customer_uuid` column from the `target_table` as it is not present in the upstream model (PROD)
+
+**Step 3: Verify schema alignment**
+
+After applying the above changes, verify that the schema of the `target_table` is aligned with the upstream model (PROD) by re-running the schema comparison.
+
+**Example SQL code to apply the fix:**
+```sql
+-- Update column data types
+ALTER TABLE target_table
+ALTER COLUMN billing_address_line1 TYPE TEXT;
+ALTER TABLE target_table
+ALTER COLUMN billing_address_line2 TYPE TEXT;
+ALTER TABLE target_table
+ALTER COLUMN billing_country TYPE TEXT;
+-- ... (update all columns with type mismatches)
+
+-- Add missing column
+ALTER TABLE target_table
+ADD COLUMN customer_id TEXT;
+
+-- Drop unnecessary column
+ALTER TABLE target_table
+DROP COLUMN customer_uuid;
+```
+**Validation:**
+
+After applying the fix, validate the changes by:
+
+* Re-running the schema comparison to ensure that the schema of the `target_table` is aligned with the upstream model (PROD)
+* Verifying that the data is correctly populated in the updated columns
+* Monitoring the system for any issues or errors related to the schema changes
+
+By applying this concrete fix, the schema drift incident should be resolved, and the `target_table` should be aligned with the upstream model (PROD).
+============================================================
+Approve this fix? [y/n] Incident data saved to: examples/live_runs/incident_20260810_183531.json
+SQL saved to: examples/live_runs/incident_20260810_183531.sql
+
+============================================================
+Final result:
+  incident_type: schema_drift
+  reused_fix:    False
+  nodes_visited: 24
+  outcome:       success
+  promoted:      True
+  log:           examples/live_runs/run_20260810_183224.log
+============================================================
+
